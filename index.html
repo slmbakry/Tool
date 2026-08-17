@@ -785,6 +785,19 @@ function bankDisplay(k){ // أول صيغة مكتوبة للبنك هي الم�
     state.owners.some(o=>{ const raw=norm(o.bank); if(raw&&bankKey(raw)===k){ disp=raw; return true; } return false; });
     state._bankNames[k]=disp; }
   return state._bankNames[k]; }
+// ===== المستفيد: نفس اسم المستفيد + نفس رقم الحساب/إنستاباي = مستفيد واحد =====
+function benAccKey(o){ const a=String((o&&o.benAcc)||"").replace(/[\s-]/g,"").toLowerCase(); return a; }
+function benNameKey(o){ const n=norm((o&&o.benName)||""); return String(n||"").replace(/\s+/g," ").trim().toLowerCase(); }
+// المفتاح = الاسم + الحساب معًا (الاتنين لازم يتطابقوا)
+function benKey(o){ const a=benAccKey(o), n=benNameKey(o); if(!a||!n) return null; return n+"|"+a; }
+function benLabel(o){ return norm(o.benName)||norm(o.name)||"—"; }
+// خريطة المستفيدين المشتركين: مفتاح -> قائمة الملاك (٢ فأكتر بس)
+function sharedBenMap(){
+  const m={}; state.owners.forEach(o=>{ const k=benKey(o); if(!k)return; (m[k]=m[k]||[]).push(o); });
+  Object.keys(m).forEach(k=>{ if(m[k].length<2) delete m[k]; });
+  return m;
+}
+function sharedBenOf(o){ const k=benKey(o); if(!k)return null; const m=sharedBenMap(); return m[k]?{key:k,owners:m[k]}:null; }
 function allBanks(){ const s={}; state.owners.forEach(o=>{ s[bankOf(o)]=1; }); return Object.keys(s).sort((a,c)=>a.localeCompare(c,"ar")); }
 function bankSet(){ if(state.banks==null) state.banks=new Set(allBanks()); return state.banks; }
 function bankBar(){
@@ -873,9 +886,12 @@ function viewMain(){
   const cSoon=all.filter(x=>x.c.status==="soon").length;
   const cRenew=all.filter(x=>x.c.renewal).length;
   let data=buildReport();
+  // عزل مجموعة مستفيد بعينه (من ضغطة «تجميع المستفيد»)
+  if(m.benKey){ data=data.filter(g=>benKey(g.o)===m.benKey); }
   const q=lc(m.q); const qDigits=String(m.q||"").replace(/\D/g,""); const qPhone=egPhone(m.q);
   if(q){ data=data.map(g=>{
       const ownerHit=lc(g.o.name).indexOf(q)!==-1
+        || lc(g.o.benName).indexOf(q)!==-1
         || (qDigits && (
              (qPhone.length>=5 && egPhone(g.o.phone).indexOf(qPhone)!==-1)
              || lc(g.o.benAcc).indexOf(q)!==-1
@@ -955,7 +971,7 @@ function viewMain(){
   '</div>';
 
   const search='<div class="relative mb-2.5">'+icon("search",16,"absolute top-1/2 -translate-y-1/2 right-3 text-stone-400")+
-    '<input id="mainSearch" value="'+esc(m.q)+'" placeholder="ابحث بالمالك، رقم الوحدة، التليفون، أو رقم الحساب/إنستاباي" class="w-full rounded-xl border border-stone-200 bg-white py-2.5 pr-9 pl-8 text-[13px] outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"/>'+
+    '<input id="mainSearch" value="'+esc(m.q)+'" placeholder="ابحث بالمالك، المستفيد، رقم الوحدة، التليفون، أو الحساب" class="w-full rounded-xl border border-stone-200 bg-white py-2.5 pr-9 pl-8 text-[13px] outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"/>'+
     (m.q?'<button data-act="mainSearchClear" class="absolute top-1/2 -translate-y-1/2 left-2.5 text-stone-400">'+icon("x",14)+'</button>':"")+'</div>';
   const filt=filterBar()+bankBar();
   if(!data.length) return toolbar+search+filt+range+head+'<p class="text-center text-stone-400 py-12 text-sm">مفيش مستحقات '+(m.q?'مطابقة للبحث':'في المدة دي ضمن الفلتر')+'. 👌</p>'+metaFooter();
@@ -964,11 +980,38 @@ function viewMain(){
   const estBanner=(anyEst||anyBeyond)?'<div class="rounded-xl border px-3 py-2 mb-2.5 text-[11px] font-medium '+(anyBeyond?'border-red-200 bg-red-50 text-red-700':'border-amber-200 bg-amber-50 text-amber-700')+'">'+
     (anyBeyond?'⚠ في وحدات شهورها بعد نهاية عقد المالك — راجع التجديد. ':'')+
     (anyEst?'⚠ في شهور قريبة لسه مش متسجّلة في الملف — متقدّرة بقيمة آخر إيجار (تقديري).':'')+'</div>':'';
+  // شريط المستفيد: لما الناتج فيه ملاك مختلفين بنفس المستفيد، أو لما تكون معزول على مستفيد
+  let benBanner="";
+  { const byBen={}; data.forEach(g=>{ const k=benKey(g.o); if(!k)return; (byBen[k]=byBen[k]||[]).push(g); });
+    const multi=Object.keys(byBen).filter(k=>{ const gs=byBen[k]; const names={}; gs.forEach(g=>{ names[g.o.key]=1; }); return Object.keys(names).length>1; });
+    if(m.benKey && byBen[m.benKey]){
+      const gs=byBen[m.benKey]; const tot=gs.reduce((s,g)=>s+g.subtotal,0);
+      const units=gs.reduce((s,g)=>s+new Set(g.rows.map(x=>x.u.code)).size,0);
+      benBanner='<div class="rounded-2xl border border-indigo-200 bg-indigo-50 px-3 py-2.5 mb-2.5">'+
+        '<div class="flex items-center justify-between gap-2">'+
+          '<div class="min-w-0"><div class="text-[11px] text-indigo-700">مستفيد واحد</div>'+
+            '<div class="text-[13px] font-bold text-indigo-900 truncate">'+esc(benLabel(gs[0].o))+'</div>'+
+            '<div class="text-[10px] text-indigo-600 font-mono" dir="ltr">'+esc(gs[0].o.benAcc||"")+'</div></div>'+
+          '<div class="text-left shrink-0"><div class="text-[10px] text-indigo-600">'+gs.length+' مالك · '+units+' وحدة</div>'+
+            '<div class="text-lg font-extrabold text-indigo-900">'+fmt(tot)+'</div></div>'+
+        '</div>'+
+        '<button data-act="benClear" class="w-full mt-2 rounded-xl border border-indigo-300 bg-white py-1.5 text-[11px] font-semibold text-indigo-700">إلغاء تجميع المستفيد</button>'+
+      '</div>';
+    } else if(multi.length){
+      benBanner='<div class="rounded-2xl border border-indigo-200 bg-indigo-50/70 px-3 py-2 mb-2.5">'+
+        '<div class="text-[11px] font-semibold text-indigo-800 mb-1.5">'+icon("user",12)+' في '+multi.length+' مستفيد ليه أكتر من مالك — اجمعهم في تحويل واحد:</div>'+
+        '<div class="flex flex-wrap gap-1.5">'+multi.map(k=>{ const gs=byBen[k]; const tot=gs.reduce((s,g)=>s+g.subtotal,0);
+          return '<button data-act="benGroup" data-k="'+esc(k)+'" class="inline-flex items-center gap-1 rounded-full border border-indigo-300 bg-white px-2.5 py-1 text-[11px] font-medium text-indigo-800">'+
+            esc(benLabel(gs[0].o))+' <span class="opacity-60">'+gs.length+'</span> · '+fmt(tot)+'</button>'; }).join("")+
+        '</div></div>';
+    }
+  }
   const groups=data.map(g=>ownerCard(g,m)).join("");
-  return toolbar+search+filt+range+head+estBanner+'<div class="mt-1 lg:columns-2 lg:gap-2.5">'+groups+'</div>'+(m.collect?'<div class="h-28"></div>'+collectionBar(m):metaFooter());
+  return toolbar+search+filt+range+head+estBanner+benBanner+'<div class="mt-1 lg:columns-2 lg:gap-2.5">'+groups+'</div>'+(m.collect?'<div class="h-28"></div>'+collectionBar(m):metaFooter());
 }
 function ownerCard(g,m){
   const o=g.o, isE=m.expanded.has(o.key), bank=norm(o.bank);
+  const shared=sharedBenOf(o);
   const ed=daysDiff(g.earliest,todayYmd());
   const stripe = ed<0?"bg-red-400":(ed<=SOON_WINDOW?"bg-amber-400":"bg-stone-200");
   const detail=isE?'<div class="px-3 py-2.5 bg-stone-50/70 border-b border-stone-100 space-y-1.5">'+ownerBankFields(o)+'</div>':"";
@@ -999,6 +1042,7 @@ function ownerCard(g,m){
     '<div class="px-3.5 py-3 border-b border-stone-100">'+
       '<div class="flex items-center justify-between gap-2">'+
         '<button data-act="openOwner" data-key="'+esc(o.key)+'" data-from="main" class="font-bold text-sm truncate text-right text-stone-900 inline-flex items-center gap-1 min-w-0">'+icon("arrowRight",13,"opacity-30 shrink-0")+'<span class="truncate">'+esc(o.name)+'</span></button>'+
+        (shared&&!m.benKey?'<button data-act="benGroup" data-k="'+esc(shared.key)+'" title="مستفيد مشترك مع '+(shared.owners.length-1)+' مالك" class="shrink-0 inline-flex items-center gap-0.5 rounded-full bg-indigo-100 text-indigo-700 border border-indigo-200 px-1.5 py-0.5 text-[9px] font-bold">'+icon("user",9)+shared.owners.length+'</button>':"")+
         subtotalHtml+'</div>'+
       '<div class="flex items-center justify-between gap-2 mt-1.5">'+
         '<span class="text-[11px] text-stone-500 inline-flex items-center gap-1 truncate min-w-0">'+(bank?icon("landmark",11,"shrink-0")+'<span class="truncate">'+esc(bank)+'</span>':'<span class="text-stone-300">— بدون بنك</span>')+'</span>'+
@@ -2193,6 +2237,8 @@ app.addEventListener("click",function(e){
     else{state.compounds=new Set(grp);}
     render();}
   else if(act==="compGroupAdd"){syncMainFromDOM();const g=t.dataset.g;const cs=compoundSet();const grp=compGroups()[g]||[];const allIn=grp.length&&grp.every(c=>cs.has(c));if(allIn){grp.forEach(c=>cs.delete(c));}else{grp.forEach(c=>cs.add(c));}if(cs.size===0)state.compounds=new Set(allCompounds());render();}
+  else if(act==="benGroup"){ syncMainFromDOM(); const m=ensureMain(); m.benKey=t.dataset.k; m.q=""; window.scrollTo(0,0); render(); }
+  else if(act==="benClear"){ syncMainFromDOM(); const m=ensureMain(); m.benKey=null; render(); }
   else if(act==="bankQuick"){ syncMainFromDOM(); const bk=t.dataset.b; const bs=bankSet(); const all=allBanks();
     const only = bs.size===1 && bs.has(bk);
     state.banks = only ? new Set(all) : new Set([bk]);
@@ -2205,7 +2251,7 @@ app.addEventListener("click",function(e){
   else if(act==="compAll"){syncMainFromDOM();state.compounds=new Set(allCompounds());render();}
   else if(act==="openOwner"){syncMainFromDOM();state.owner=state.owners.find(o=>o.key===t.dataset.key);state.ownerBack=t.dataset.from||"main";state.view="owner";window.scrollTo(0,0);render();}
   else if(act==="openUnit"){syncMainFromDOM();const f=findUnit(t.dataset.code);if(f){state.owner=f.o;state.unit=f.u;state.unitBack=t.dataset.from||"main";state.view="unit";window.scrollTo(0,0);render();}}
-  else if(act==="goHome"){ if(state.view==="main"){ window.scrollTo(0,0); return; } state.view="main"; state.owner=null; state.unit=null; state.editing=false; state.draft=null; state.editingOwner=false; state.oDraft=null; state.err=""; window.scrollTo(0,0); render(); }
+  else if(act==="goHome"){ if(state.view==="main"){ window.scrollTo(0,0); return; } state.view="main"; state.owner=null; state.unit=null; state.editing=false; state.draft=null; state.editingOwner=false; if(state.report)state.report.benKey=null; state.oDraft=null; state.err=""; window.scrollTo(0,0); render(); }
   else if(act==="back"){state.editingOwner=false;state.oDraft=null;const to=t.dataset.to;if(to==="owner"){state.view="owner";state.unit=null;}else if(to==="owners"){state.view="owners";state.owner=null;state.unit=null;}else if(to==="notes"){state.view="notes";state.unit=null;}else if(to==="comp"){state.view="comp";state.unit=null;}else{state.view="main";state.owner=null;state.unit=null;}window.scrollTo(0,0);render();}
   else if(act==="clearSearch"){state.query="";state._focusSearch=true;render();}
   else if(act==="mainSearchClear"){ensureMain().q="";render();}
