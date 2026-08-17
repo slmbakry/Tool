@@ -104,6 +104,7 @@ const PATHS = {
   copy:'<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
   check:'<polyline points="20 6 9 17 4 12"/>',
   arrowRight:'<line x1="5" x2="19" y1="12" y2="12"/><polyline points="12 5 19 12 12 19"/>',
+  chevronDown:'<polyline points="6 9 12 15 18 9"/>',
   home:'<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
   upload:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>',
   sheet:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h2"/><path d="M8 17h2"/><path d="M14 13h2"/><path d="M14 17h2"/>',
@@ -791,14 +792,26 @@ function bankBar(){
   const bs=bankSet(); const total=banks.length, sel=banks.filter(x=>bs.has(x)).length; const allOn=sel===total;
   const counts={}; state.owners.forEach(o=>{ const k=bankOf(o); counts[k]=(counts[k]||0)+1; });
   const chip=(label,on,act,data,n)=>'<button data-act="'+act+'" '+(data||"")+' class="shrink-0 inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-xs font-medium transition '+(on?"bg-stone-900 text-white border-stone-900":"bg-white text-stone-500 border-stone-200")+'">'+(on?icon("check",12):"")+esc(label)+(n!=null?' <span class="opacity-60">'+n+'</span>':"")+'</button>';
-  let chips=chip("الكل",allOn,"bankAll","",total);
-  banks.forEach(bk=>{ chips+=chip(bk,bs.has(bk)&&!allOn,"bankOne",'data-b="'+esc(bk)+'"',counts[bk]); });
+  // اسم البنك المختار حاليًا (لو واحد بس)
+  const activeOne = (!allOn && sel===1) ? banks.filter(x=>bs.has(x))[0] : null;
+  // شريحة سريعة: CIB
+  const cibKey = banks.filter(x=>/cib|التجاري الدولي/i.test(x))[0] || null;
+  const cibOn = cibKey && !allOn && bs.has(cibKey) && sel===1;
+  const opts = '<option value="">كل البنوك</option>' + banks.map(bk=>
+      '<option value="'+esc(bk)+'"'+(activeOne===bk?' selected':'')+'>'+esc(bk)+' ('+(counts[bk]||0)+')</option>').join("");
   return '<div class="mb-3">'+
-    '<div class="flex items-center justify-between gap-2 mb-1.5 px-1">'+
+    '<div class="flex items-center gap-2 px-1 mb-1.5">'+
       '<span class="text-xs text-stone-500 inline-flex items-center gap-1.5">'+icon("creditCard",13)+' بنك المستفيد</span>'+
-      (allOn?"":'<button data-act="bankAll" class="text-[10px] font-medium text-stone-500 border border-stone-200 rounded-lg px-2 py-0.5">إظهار الكل</button>')+
+      (!allOn?'<span class="text-[10px] text-stone-400">('+sel+' من '+total+')</span>':"")+
     '</div>'+
-    '<div class="flex flex-wrap gap-1.5">'+chips+'</div></div>';
+    '<div class="flex items-center gap-1.5">'+
+      '<div class="relative flex-1 min-w-0">'+
+        '<select id="bankSel" data-act="bankSel" class="w-full appearance-none rounded-xl border px-3 py-2 text-xs font-medium '+(allOn?"bg-white text-stone-600 border-stone-200":"bg-stone-900 text-white border-stone-900")+'">'+opts+'</select>'+
+        '<span class="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 opacity-60">'+icon("chevronDown",13)+'</span>'+
+      '</div>'+
+      (cibKey?'<button data-act="bankQuick" data-b="'+esc(cibKey)+'" class="shrink-0 inline-flex items-center gap-1 rounded-xl border px-3 py-2 text-xs font-bold transition '+(cibOn?"bg-stone-900 text-white border-stone-900":"bg-white text-stone-600 border-stone-200")+'">'+(cibOn?icon("check",12):"")+'CIB</button>':"")+
+      (!allOn?'<button data-act="bankAll" class="shrink-0 rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-xs text-stone-500">×</button>':"")+
+    '</div></div>';
 }
 function filterBar(){
   const comps=allCompounds(); if(comps.length<=1) return "";
@@ -876,17 +889,24 @@ function viewMain(){
   const tBtn=(act,ic,label,cls)=>'<button data-act="'+act+'" class="inline-flex flex-col items-center justify-center gap-1 rounded-2xl px-1 py-2 text-[10px] font-bold border shadow-sm transition active:scale-95 '+cls+'">'+icon(ic,18)+'<span class="truncate max-w-full px-0.5">'+label+'</span></button>';
   const hasTags=allTags().length>0;
   const nNotes=collectNotes().length;
-  const toolbar='<div class="maintb"><div class="grid grid-flow-col auto-cols-fr gap-1.5">'+
+  const nRev=anchorReviews().length;
+  const moreCount=(hasTags?1:0)+1+1+(nRev?1:0); // تسويات + Excel + تقييم + مراجعة
+  const moreBadge=nRev?nRev:null;
+  const toolbar='<div class="maintb"><div class="grid grid-cols-5 gap-1.5">'+
     tBtn("goOwners","user","الملاك","bg-sky-50 text-sky-800 border-sky-200")+
     tBtn("rPdf","printer","PDF","bg-rose-50 text-rose-800 border-rose-200")+
+    tBtn("toggleCollect",m.collect?"x":"banknote",m.collect?"إنهاء":"سداد",m.collect?"bg-emerald-600 text-white border-emerald-600":"bg-stone-900 text-white border-stone-900")+
+    tBtn("openNotes","alert",nNotes?("ملاحظات "+nNotes):"ملاحظات",nNotes?"bg-amber-50 text-amber-800 border-amber-200":"bg-stone-50 text-stone-400 border-stone-200")+
+    tBtn("toggleMore","layout",state.moreOpen?"إغلاق":(moreBadge?("المزيد "+moreBadge):"المزيد"),state.moreOpen?"bg-stone-900 text-white border-stone-900":(moreBadge?"bg-red-50 text-red-700 border-red-200":"bg-stone-50 text-stone-600 border-stone-200"))+
+  '</div>'+
+  (state.moreOpen?'<div class="grid grid-cols-5 gap-1.5 mt-1.5">'+
     tBtn("rExcel","download","Excel","bg-emerald-50 text-emerald-800 border-emerald-200")+
-    tBtn("openComp","layout","تقييم ملاك","bg-violet-50 text-violet-800 border-violet-200")+
-    (nNotes?tBtn("openNotes","alert","ملاحظات "+nNotes,"bg-amber-50 text-amber-800 border-amber-200"):"")+
-    ((function(){const nR=anchorReviews().length; return nR?tBtn("openReview","alert","مراجعة "+nR,"bg-red-50 text-red-800 border-red-300"):"";})())+
-    tBtn("openCloud","cloud","سحابي",SB.signedIn?"bg-teal-50 text-teal-800 border-teal-200":"bg-stone-50 text-stone-500 border-stone-200")+
+    tBtn("openComp","layout","تقييم","bg-violet-50 text-violet-800 border-violet-200")+
+    (nRev?tBtn("openReview","alert","مراجعة "+nRev,"bg-red-50 text-red-800 border-red-300"):"")+
     (hasTags?tBtn("openTags","tag","تسويات","bg-orange-50 text-orange-800 border-orange-200"):"")+
-    tBtn("toggleCollect",m.collect?"x":"banknote",m.collect?"إنهاء السداد":"سداد",m.collect?"bg-emerald-600 text-white border-emerald-600":"bg-stone-900 text-white border-stone-900")+
-  '</div></div>';
+    tBtn("openCloud","cloud","سحابي",SB.signedIn?"bg-teal-50 text-teal-800 border-teal-200":"bg-stone-50 text-stone-500 border-stone-200")+
+  '</div>':"")+
+  '</div>';
 
   const sChip=(id,ic,label,n,onc,offc)=>'<button data-act="statusF" data-s="'+id+'" class="shrink-0 inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium '+(m.status===id?onc:offc)+'">'+icon(ic,12)+' '+label+(n!=null?' '+n:"")+'</button>';
   const strip='<div class="flex gap-1.5 flex-wrap mb-2">'+
@@ -1103,6 +1123,27 @@ function viewOwnerDetail(){
     '<div class="space-y-2">'+unitCards+'</div>'+metaFooter();
 }
 
+// شاشة الدخول الأولى — أول حاجة تظهر لما الأداة تفتح وانت مش مسجّل دخول
+function viewLoginGate(){
+  const inp=(id,ph,extra)=>'<input id="'+id+'" placeholder="'+esc(ph)+'" '+extra+' class="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-sm" dir="ltr"/>';
+  return '<div class="min-h-[70vh] flex flex-col justify-center">'+
+    '<div class="text-center mb-5">'+
+      '<div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-stone-900 text-white mb-3">'+icon("cloud",26)+'</div>'+
+      '<h1 class="text-xl font-bold">متابعة مستحقات الملاك</h1>'+
+      '<p class="text-xs text-stone-500 mt-1">سجّل دخولك عشان تفتح بياناتك من أي جهاز</p>'+
+    '</div>'+
+    '<div class="rounded-3xl border border-stone-200 bg-white p-4 space-y-2.5 shadow-sm">'+
+      inp("sb-email","الإيميل",'type="email" autocomplete="username"')+
+      inp("sb-pass","الباسورد",'type="password" autocomplete="current-password"')+
+      '<button data-act="sbLogin" class="w-full inline-flex items-center justify-center gap-1.5 rounded-xl bg-stone-900 text-white py-3 text-sm font-bold active:scale-[0.99]">'+icon("check",15)+' دخول</button>'+
+      (state.sbMsg?'<p class="text-[11px] text-center '+(state.sbOk?"text-emerald-700":"text-red-600")+'">'+esc(state.sbMsg)+'</p>':"")+
+    '</div>'+
+    (state.sbOffline?'<div class="rounded-2xl border border-amber-200 bg-amber-50 p-3 mt-3 text-[11px] text-amber-800 text-center">'+
+       'تعذّر الاتصال بالسحابة. تقدر تكمّل على البيانات المحفوظة على الجهاز ده.'+
+       '<button data-act="skipLogin" class="block w-full mt-2 rounded-xl border border-amber-300 bg-white py-2 text-[12px] font-semibold text-amber-900">فتح البيانات المحلية</button></div>':"")+
+    '<button data-act="skipLogin" class="w-full text-center text-[12px] text-stone-400 underline mt-4 py-2">استخدام بدون حساب (محلي فقط)</button>'+
+    '</div>';
+}
 function viewCloudSB(){
   const on=SB.signedIn;
   const inp=(id,val,ph,extra)=>'<input id="'+id+'" value="'+esc(val==null?"":String(val))+'" placeholder="'+esc(ph||"")+'" '+(extra||"")+' class="w-full rounded-lg border border-stone-300 px-2.5 py-2 text-sm" dir="ltr"/>';
@@ -1867,6 +1908,7 @@ function printCompReport(){
 
 
 function screenTitle(){
+  if(!SB.signedIn && !state.localOnly) return "تسجيل الدخول";
   if(!state.owners.length) return "ابدأ برفع الملف";
   if(state.pending) return "استيراد بيانات";
   if(state.clearAsk) return "مسح البيانات";
@@ -1889,6 +1931,8 @@ const app=document.getElementById("app");
 document.getElementById("logo").innerHTML=icon("landmark",18);
 function render(){
   let html;
+  // بوابة الدخول: أول شاشة تظهر طالما مش مسجّل دخول ومختارش يشتغل محليًا
+  if(!SB.signedIn && !state.localOnly){ html=viewLoginGate(); paint(html); return; }
   if(state.pending){ html=viewPending(); }
   else if(state.clearAsk){ html=viewClear(); }
   else if(!state.owners.length){ html=viewUpload(); }
@@ -1917,6 +1961,9 @@ function render(){
         '<div class="flex gap-1.5 mt-2"><button data-act="backup" class="inline-flex items-center gap-1 rounded-lg bg-stone-900 text-white px-2.5 py-1.5 text-xs font-semibold">'+icon("download",13)+' نزّل نسخة احتياطية</button>'+
           '<button data-act="bkSnooze" class="rounded-lg border border-amber-300 text-amber-700 px-2.5 py-1.5 text-xs font-medium">لاحقًا</button></div></div></div></div>'+html;
   }
+  paint(html);
+}
+function paint(html){
   app.innerHTML=html;
   renderSyncBar();
   const sn=document.getElementById("screen-name"); if(sn)sn.textContent=screenTitle();
@@ -2066,9 +2113,9 @@ app.addEventListener("click",function(e){
     const mail=gv("sb-email"), pass=gv("sb-pass");
     if(!mail||!pass){ state.sbMsg="اكتب الإيميل والباسورد."; state.sbOk=false; render(); return; }
     state.sbMsg="بيسجّل الدخول…"; state.sbOk=true; render();
-    SB.signIn(mail,pass).then(function(r){ state.sbOk=r.ok; state.sbMsg=r.msg; if(!r.ok){ render(); return; }
-      SB.boot().then(function(bt){ state.sbMsg=(bt&&bt.msg)||r.msg; state.sbOk=!!(bt&&bt.ok); render(); }); }); }
-  else if(act==="sbLogout"){ if(window.confirm("تسجيل الخروج؟ البيانات المحلية هتفضل زي ما هي.")){ SB.signOut(); state.sbMsg="اتسجّل الخروج."; state.sbOk=true; render(); } }
+    SB.signIn(mail,pass).then(function(r){ state.sbOk=r.ok; state.sbMsg=r.msg; if(!r.ok){ if(/الإنترنت/.test(r.msg||""))state.sbOffline=true; render(); return; }
+      state.localOnly=false; state.sbOffline=false; SB.boot().then(function(bt){ state.sbMsg=(bt&&bt.msg)||r.msg; state.sbOk=!!(bt&&bt.ok); render(); }); }); }
+  else if(act==="sbLogout"){ if(window.confirm("تسجيل الخروج؟ البيانات المحلية هتفضل زي ما هي.")){ SB.signOut(); state.localOnly=false; state.sbMsg="اتسجّل الخروج."; state.sbOk=true; state.view="main"; render(); } }
   else if(act==="sbPull"){ state.sbMsg="بيحمّل…"; state.sbOk=true; render();
     SB.pull().then(function(r){ if(r.ok&&r.obj){ SB.applySnapshot(r.obj); state.sbMsg="اتحمّلت البيانات ✓"; state.sbOk=true; }
       else { state.sbMsg=r.msg||"مفيش بيانات."; state.sbOk=!!r.ok; } render(); }); }
@@ -2133,6 +2180,15 @@ app.addEventListener("click",function(e){
     else{state.compounds=new Set(grp);}
     render();}
   else if(act==="compGroupAdd"){syncMainFromDOM();const g=t.dataset.g;const cs=compoundSet();const grp=compGroups()[g]||[];const allIn=grp.length&&grp.every(c=>cs.has(c));if(allIn){grp.forEach(c=>cs.delete(c));}else{grp.forEach(c=>cs.add(c));}if(cs.size===0)state.compounds=new Set(allCompounds());render();}
+  else if(act==="bankSel"){ syncMainFromDOM(); const el=document.getElementById("bankSel"); const v=el?el.value:"";
+    if(!v) state.banks=new Set(allBanks()); else state.banks=new Set([v]);
+    render(); }
+  else if(act==="bankQuick"){ syncMainFromDOM(); const bk=t.dataset.b; const bs=bankSet(); const all=allBanks();
+    const only = bs.size===1 && bs.has(bk);
+    state.banks = only ? new Set(all) : new Set([bk]);
+    render(); }
+  else if(act==="toggleMore"){ syncMainFromDOM(); state.moreOpen=!state.moreOpen; render(); }
+  else if(act==="skipLogin"){ state.localOnly=true; state.sbMsg=""; window.scrollTo(0,0); render(); }
   else if(act==="bankAll"){ syncMainFromDOM(); state.banks=new Set(allBanks()); render(); }
   else if(act==="bankOne"){ syncMainFromDOM(); const bk=t.dataset.b; const bs=bankSet(); const all=allBanks();
     if(bs.size===1&&bs.has(bk)) state.banks=new Set(all); else state.banks=new Set([bk]); render(); }
@@ -2437,13 +2493,14 @@ const SB = (function(){
 /* ============================ boot ============================ */
 load(); computeAll(); if(state.owners.length && !loadAuto()) saveAuto(); render();
 (async function initSB(){ try{
-  if(!SB.signedIn) return;
+  if(!SB.signedIn){ render(); return; }
   state.sbBusy=true; renderSyncBar();
   const r=await SB.boot();
   state.sbBusy=false;
   if(r&&r.msg){ state.sbMsg=r.msg; state.sbOk=!!r.ok; }
+  if(r&&!r.ok&&/الإنترنت/.test(r.msg||"")) state.sbOffline=true;
   render();
-}catch(e){ state.sbBusy=false; } })();
+}catch(e){ state.sbBusy=false; state.sbOffline=true; render(); } })();
 (async function initGH(){ try{
   if(!GH.configured) return;
   state.ghBusy=true; renderSyncBar();
