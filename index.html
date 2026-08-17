@@ -797,19 +797,32 @@ function bankBar(){
   // شريحة سريعة: CIB
   const cibKey = banks.filter(x=>/cib|التجاري الدولي/i.test(x))[0] || null;
   const cibOn = cibKey && !allOn && bs.has(cibKey) && sel===1;
-  const opts = '<option value="">كل البنوك</option>' + banks.map(bk=>
-      '<option value="'+esc(bk)+'"'+(activeOne===bk?' selected':'')+'>'+esc(bk)+' ('+(counts[bk]||0)+')</option>').join("");
+  // ترتيب القائمة: الأكتر ملاكًا الأول، و«غير محدّد» دايمًا في الآخر
+  const sorted = banks.slice().sort((a,b)=>{
+    const au=(a==="غير محدّد")?1:0, bu=(b==="غير محدّد")?1:0;
+    if(au!==bu) return au-bu;
+    const d=(counts[b]||0)-(counts[a]||0);
+    if(d) return d;
+    return String(a).localeCompare(String(b),"ar");
+  });
+  const opts = '<option value="">كل البنوك ('+state.owners.length+')</option>' + sorted.map(bk=>
+      '<option value="'+esc(bk)+'"'+(activeOne===bk?' selected':'')+'>'+esc(bk)+' — '+(counts[bk]||0)+'</option>').join("");
+  // شريحة سريعة إضافية: أكتر بنك عند الملاك (لو مش CIB نفسه)
+  const topKey = sorted.filter(x=>x!=="غير محدّد" && x!==cibKey)[0] || null;
+  const topOn = topKey && !allOn && bs.has(topKey) && sel===1;
+  const topShort = topKey ? (topKey.length>10 ? topKey.slice(0,9)+"…" : topKey) : "";
   return '<div class="mb-3">'+
     '<div class="flex items-center gap-2 px-1 mb-1.5">'+
       '<span class="text-xs text-stone-500 inline-flex items-center gap-1.5">'+icon("creditCard",13)+' بنك المستفيد</span>'+
       (!allOn?'<span class="text-[10px] text-stone-400">('+sel+' من '+total+')</span>':"")+
     '</div>'+
-    '<div class="flex items-center gap-1.5">'+
-      '<div class="relative flex-1 min-w-0">'+
-        '<select id="bankSel" data-act="bankSel" class="w-full appearance-none rounded-xl border px-3 py-2 text-xs font-medium '+(allOn?"bg-white text-stone-600 border-stone-200":"bg-stone-900 text-white border-stone-900")+'">'+opts+'</select>'+
+    '<div class="flex items-center gap-1.5 flex-wrap">'+
+      '<div class="relative shrink min-w-0 max-w-[46%]">'+
+        '<select id="bankSel" class="w-full appearance-none truncate rounded-xl border pr-2.5 pl-6 py-2 text-xs font-medium '+(allOn?"bg-white text-stone-600 border-stone-200":"bg-stone-900 text-white border-stone-900")+'">'+opts+'</select>'+
         '<span class="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 opacity-60">'+icon("chevronDown",13)+'</span>'+
       '</div>'+
-      (cibKey?'<button data-act="bankQuick" data-b="'+esc(cibKey)+'" class="shrink-0 inline-flex items-center gap-1 rounded-xl border px-3 py-2 text-xs font-bold transition '+(cibOn?"bg-stone-900 text-white border-stone-900":"bg-white text-stone-600 border-stone-200")+'">'+(cibOn?icon("check",12):"")+'CIB</button>':"")+
+      (topKey?'<button data-act="bankQuick" data-b="'+esc(topKey)+'" title="'+esc(topKey)+'" class="shrink-0 inline-flex items-center gap-1 rounded-xl border px-2.5 py-2 text-xs font-bold transition '+(topOn?"bg-stone-900 text-white border-stone-900":"bg-white text-stone-600 border-stone-200")+'">'+(topOn?icon("check",12):"")+esc(topShort)+'</button>':"")+
+      (cibKey?'<button data-act="bankQuick" data-b="'+esc(cibKey)+'" class="shrink-0 inline-flex items-center gap-1 rounded-xl border px-2.5 py-2 text-xs font-bold transition '+(cibOn?"bg-stone-900 text-white border-stone-900":"bg-white text-stone-600 border-stone-200")+'">'+(cibOn?icon("check",12):"")+'CIB</button>':"")+
       (!allOn?'<button data-act="bankAll" class="shrink-0 rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-xs text-stone-500">×</button>':"")+
     '</div></div>';
 }
@@ -2180,9 +2193,6 @@ app.addEventListener("click",function(e){
     else{state.compounds=new Set(grp);}
     render();}
   else if(act==="compGroupAdd"){syncMainFromDOM();const g=t.dataset.g;const cs=compoundSet();const grp=compGroups()[g]||[];const allIn=grp.length&&grp.every(c=>cs.has(c));if(allIn){grp.forEach(c=>cs.delete(c));}else{grp.forEach(c=>cs.add(c));}if(cs.size===0)state.compounds=new Set(allCompounds());render();}
-  else if(act==="bankSel"){ syncMainFromDOM(); const el=document.getElementById("bankSel"); const v=el?el.value:"";
-    if(!v) state.banks=new Set(allBanks()); else state.banks=new Set([v]);
-    render(); }
   else if(act==="bankQuick"){ syncMainFromDOM(); const bk=t.dataset.b; const bs=bankSet(); const all=allBanks();
     const only = bs.size===1 && bs.has(bk);
     state.banks = only ? new Set(all) : new Set([bk]);
@@ -2210,6 +2220,9 @@ app.addEventListener("change",function(e){
   const el=e.target;
   if(el.classList&&el.classList.contains("pay-check")){const row=el.closest(".pay-row");if(row){row.classList.toggle("bg-emerald-50/60",el.checked);const m=ensureMain();const r=m.rows[row.dataset.key]=m.rows[row.dataset.key]||{};r.checked=el.checked;const am=row.querySelector(".pay-amt");if(am)r.amount=parseFloat(am.value.replace(/[^\d.]/g,""))||0;if(row.dataset.owner)r.owner=row.dataset.owner;}mainTotals();}
   else if(el.id==="ed-auto"){ syncDraftFromDOM(); render(); }
+  else if(el.id==="bankSel"){ syncMainFromDOM(); const v=el.value;
+    if(!v) state.banks=new Set(allBanks()); else state.banks=new Set([v]);
+    render(); }
   else if(el.id==="repMonth"){ state.repMonthIdx=+el.value; render(); }
   else if(el.id==="rFrom"){ syncMainFromDOM(); ensureMain().from=el.value?inputToYmd(el.value):null; state.report.preset="custom"; render(); }
   else if(el.id==="rTo"){ syncMainFromDOM(); ensureMain().to=el.value?inputToYmd(el.value):null; state.report.preset="custom"; render(); }
