@@ -73,7 +73,7 @@ TODO — قائمة التنفيذ للسيشن الجاية (أداة متاب�
 </head>
 <body class="bg-stone-100 text-stone-900">
   <div class="appbar">
-    <div class="mx-auto max-w-xl lg:max-w-6xl px-4 py-2.5 flex items-center gap-2.5">
+    <div class="mx-auto max-w-xl lg:max-w-3xl px-4 py-2.5 flex items-center gap-2.5">
       <button data-act="goHome" title="الرجوع للصفحة الرئيسية" class="flex items-center gap-2.5 min-w-0 text-right rounded-xl px-1 -mx-1 py-0.5 transition hover:bg-stone-200/60 active:scale-[0.98] cursor-pointer">
         <span class="grid place-items-center w-9 h-9 rounded-xl bg-stone-900 text-white shrink-0" id="logo"></span>
         <span class="min-w-0">
@@ -84,7 +84,7 @@ TODO — قائمة التنفيذ للسيشن الجاية (أداة متاب�
     </div>
   </div>
   <div id="syncBar"></div>
-  <div class="mx-auto max-w-xl lg:max-w-6xl px-4 pb-24 pt-3">
+  <div class="mx-auto max-w-xl lg:max-w-3xl px-4 pb-24 pt-3">
     <div id="app"></div>
   </div>
   <input id="fileInput" type="file" accept=".xlsx,.xls" class="hidden" />
@@ -425,18 +425,39 @@ function monLabelEn(idx){const{y,m}=idxToYM(idx);return MON_EN[m-1]+" "+y;}
 // next n unpaid months for a unit, each with its period (from→to) and remaining value
 function unitMonthsBreakdown(u,n){
   const anchor=unitAnchor(u)||{day:1,month:1};
-  const idxs=Object.keys(u.grid).map(Number).sort((a,b)=>a-b).filter(i=>u.grid[i].due>0&&(u.grid[i].due-u.grid[i].paid)>0.0001);
   const N=Math.max(0,n|0);
-  const take=idxs.slice(0,N);
+  const all=Object.keys(u.grid).map(Number).sort((a,b)=>a-b);
+  const realIdx=all.filter(i=>u.grid[i].due>0);              // الشهور اللي ليها قسط حقيقي
+  const lastReal=realIdx.length?realIdx[realIdx.length-1]:null;
+  // فجوة حقيقية = شهر بصفر وبعده شهور بقيم حقيقية (سطر متنسي في الملف)
+  // أما الأصفار في آخر الجدول فمعناها إن الملف مخلّصش — دي تتقدّر عادي
+  const firstUnpaid=all.filter(i=>u.grid[i].due>0&&(u.grid[i].due-u.grid[i].paid)>0.0001)[0];
+  const take=[]; const gapMonths=[];
+  if(firstUnpaid!=null){
+    for(let k=all.indexOf(firstUnpaid); k<all.length && take.length<N; k++){
+      const i=all[k], g=u.grid[i];
+      if(!(g.due>0)){
+        if(lastReal!=null && i<lastReal){ gapMonths.push(i); break; }  // فجوة في النص -> وقف وتحذير
+        break;                                                        // أصفار في الآخر -> كمّل بالتقدير
+      }
+      if((g.due-(g.paid||0))>0.0001) take.push(i);
+    }
+  }
+  const blocked=gapMonths.length>0;
   const lines=take.map(idx=>{const g=u.grid[idx];const paid=g.paid||0;return {idx,from:periodStart(anchor,idx),to:addDaysYmd(periodStart(anchor,idx+1),-1),due:g.due,paid,value:g.due-paid,partial:paid>0.0001};});
-  // extend forward with ESTIMATED months (last recorded monthly rent) when matrix has fewer months than requested
-  if(lines.length<N){
-    const allDue=Object.keys(u.grid).map(Number).filter(i=>u.grid[i].due>0).sort((a,b)=>a-b);
-    const rentGuess=allDue.length?u.grid[allDue[allDue.length-1]].due:0;
-    let lastIdx=lines.length?lines[lines.length-1].idx:(allDue.length?allDue[allDue.length-1]:null);
+  // استكمال بشهور تقديرية بقيمة آخر قسط حقيقي — في حدود العدد المطلوب فقط
+  if(lines.length<N && !blocked){
+    const rentGuess=lastReal!=null?u.grid[lastReal].due:0;
+    // نبدأ من بعد آخر شهر مأخوذ، أو من بعد آخر شهر حقيقي في الجدول
+    let lastIdx=lines.length?lines[lines.length-1].idx:lastReal;
     let guard=0;
-    while(lines.length<N && rentGuess>0 && lastIdx!=null && guard++<60){
+    while(lines.length<N && rentGuess>0 && lastIdx!=null && guard++<120){
       lastIdx+=1;
+      if(u.grid[lastIdx] && u.grid[lastIdx].due>0){          // لو لقى قسط حقيقي، ياخده كما هو
+        const g=u.grid[lastIdx], paid=g.paid||0;
+        if((g.due-paid)>0.0001) lines.push({idx:lastIdx,from:periodStart(anchor,lastIdx),to:addDaysYmd(periodStart(anchor,lastIdx+1),-1),due:g.due,paid,value:g.due-paid,partial:paid>0.0001});
+        continue;
+      }
       const from=periodStart(anchor,lastIdx);
       const beyond=u.contractEnd?(ymdToUTC(from)>ymdToUTC(u.contractEnd)):false;
       lines.push({idx:lastIdx,from,to:addDaysYmd(periodStart(anchor,lastIdx+1),-1),due:rentGuess,paid:0,value:rentGuess,partial:false,estimated:true,beyond});
@@ -448,7 +469,7 @@ function unitMonthsBreakdown(u,n){
   const hasEstimated=lines.some(l=>l.estimated);
   const hasBeyond=lines.some(l=>l.beyond);
   const hasMissingDue=lines.some(l=>l.estimated&&!l.beyond);
-  return {lines,total,count:lines.length,hasPartial,hasEstimated,hasBeyond,hasMissingDue,equal:!hasPartial&&!hasEstimated&&rr.length>0&&rr.every(v=>v===rr[0]),perMonth:lines.length?lines[0].value:0};
+  return {lines,total,count:lines.length,hasPartial,hasEstimated,hasBeyond,hasMissingDue,blocked,gapMonths,shortBy:Math.max(0,N-lines.length),equal:!hasPartial&&!hasEstimated&&rr.length>0&&rr.every(v=>v===rr[0]),perMonth:lines.length?lines[0].value:0};
 }
 function ownerPayableUnits(o){return o.units.filter(u=>unitVisible(u)&&!unitExcluded(u)&&unitDuePayments(u).length>0);}
 function ownerMonthsFor(o){const m=state.report; if(m&&m.ownerMonths&&m.ownerMonths[o.key]!=null)return m.ownerMonths[o.key]; const pu=ownerPayableUnits(o); return Math.max(1,...pu.map(u=>u.payEvery||1));}
@@ -886,8 +907,6 @@ function viewMain(){
   const cSoon=all.filter(x=>x.c.status==="soon").length;
   const cRenew=all.filter(x=>x.c.renewal).length;
   let data=buildReport();
-  // عزل مجموعة مستفيد بعينه (من ضغطة «تجميع المستفيد»)
-  if(m.benKey){ data=data.filter(g=>benKey(g.o)===m.benKey); }
   const q=lc(m.q); const qDigits=String(m.q||"").replace(/\D/g,""); const qPhone=egPhone(m.q);
   if(q){ data=data.map(g=>{
       const ownerHit=lc(g.o.name).indexOf(q)!==-1
@@ -975,11 +994,29 @@ function viewMain(){
     (m.q?'<button data-act="mainSearchClear" class="absolute top-1/2 -translate-y-1/2 left-2.5 text-stone-400">'+icon("x",14)+'</button>':"")+'</div>';
   const filt=filterBar()+bankBar();
   if(!data.length) return toolbar+search+filt+range+head+'<p class="text-center text-stone-400 py-12 text-sm">مفيش مستحقات '+(m.q?'مطابقة للبحث':'في المدة دي ضمن الفلتر')+'. 👌</p>'+metaFooter();
-  const anyEst=data.some(g=>g.rows.some(x=>x.p.estimated&&!x.p.beyond));
-  const anyBeyond=data.some(g=>g.rows.some(x=>x.p.beyond));
+  // وحدات فيها شهر قسطه صفر (قيمة ناقصة) — لازم تنبيه صريح
+  const gapUnits=[];
+  data.forEach(g=>{ const seen={}; g.rows.forEach(x=>{ const u=x.u; if(seen[u.code])return; seen[u.code]=1;
+      const bb=unitMonthsBreakdown(u,ownerMonthsFor(g.o));
+      if(bb.blocked) gapUnits.push({u,o:g.o,months:bb.gapMonths.map(i=>monLabel(i)),shortBy:bb.shortBy}); }); });
+  const gapBanner=gapUnits.length?'<div class="rounded-xl border border-red-300 bg-red-50 px-3 py-2.5 mb-2.5">'+
+    '<div class="text-[11px] font-bold text-red-800 mb-1">'+icon("alert",13)+' شهر ناقص في نص الجدول — '+gapUnits.length+' وحدة متوقفة عنده:</div>'+
+    '<div class="space-y-0.5">'+gapUnits.slice(0,6).map(x=>
+      '<div class="text-[11px] text-red-700"><span class="font-mono">'+esc(x.u.code)+'</span> — '+esc(x.months.join("، "))+
+      (x.shortBy?' <span class="opacity-70">(ناقص '+x.shortBy+' شهر من المطلوب)</span>':'')+'</div>').join("")+'</div>'+
+    (gapUnits.length>6?'<div class="text-[10px] text-red-600 mt-1">و'+(gapUnits.length-6)+' وحدة كمان…</div>':'')+
+    '<div class="text-[10px] text-red-600 mt-1.5">الشهر ده قيمته صفر ومسبوق ومتبوع بأقساط — يبدو إنه اتنسي في الملف. صحّحه عشان تكمّل السداد.</div></div>':'';
+  // نقرأ من التفصيل الفعلي بعدد الشهور المطلوب — مش من صفوف الاستحقاق وحدها
+  let anyEst=false, anyBeyond=false;
+  data.forEach(g=>{ const seen={}; g.rows.forEach(x=>{ const u=x.u; if(seen[u.code])return; seen[u.code]=1;
+      const bb=unitMonthsBreakdown(u,ownerMonthsFor(g.o));
+      if(bb.hasEstimated&&!bb.hasBeyond) anyEst=true;
+      if(bb.hasBeyond) anyBeyond=true;
+      if(bb.hasEstimated) anyEst=anyEst||bb.lines.some(l=>l.estimated&&!l.beyond);
+    }); });
   const estBanner=(anyEst||anyBeyond)?'<div class="rounded-xl border px-3 py-2 mb-2.5 text-[11px] font-medium '+(anyBeyond?'border-red-200 bg-red-50 text-red-700':'border-amber-200 bg-amber-50 text-amber-700')+'">'+
     (anyBeyond?'⚠ في وحدات شهورها بعد نهاية عقد المالك — راجع التجديد. ':'')+
-    (anyEst?'⚠ في شهور قريبة لسه مش متسجّلة في الملف — متقدّرة بقيمة آخر إيجار (تقديري).':'')+'</div>':'';
+    (anyEst?'الشهور اللي لسه مش متسجّلة في الملف محسوبة بقيمة آخر إيجار وموسومة «تقديري».':'')+'</div>':'';
   // شريط المستفيد: لما الناتج فيه ملاك مختلفين بنفس المستفيد، أو لما تكون معزول على مستفيد
   let benBanner="";
   { const byBen={}; data.forEach(g=>{ const k=benKey(g.o); if(!k)return; (byBen[k]=byBen[k]||[]).push(g); });
@@ -1007,7 +1044,7 @@ function viewMain(){
     }
   }
   const groups=data.map(g=>ownerCard(g,m)).join("");
-  return toolbar+search+filt+range+head+estBanner+benBanner+'<div class="mt-1 lg:columns-2 lg:gap-2.5">'+groups+'</div>'+(m.collect?'<div class="h-28"></div>'+collectionBar(m):metaFooter());
+  return toolbar+search+filt+range+head+gapBanner+estBanner+benBanner+'<div class="mt-1 space-y-2.5">'+groups+'</div>'+(m.collect?'<div class="h-28"></div>'+collectionBar(m):metaFooter());
 }
 function ownerCard(g,m){
   const o=g.o, isE=m.expanded.has(o.key), bank=norm(o.bank);
@@ -1079,7 +1116,7 @@ function payRow(x,m){
 }
 function collectionBar(m){
   const sc=(v)=>'<button data-act="bulkSrc" data-s="'+esc(v)+'" class="flex-1 rounded-lg border px-1 py-1.5 text-[11px] font-semibold '+(m.source===v?"bg-stone-900 text-white border-stone-900":"bg-white text-stone-600 border-stone-200")+'">'+esc(v)+'</button>';
-  return '<div class="fixed bottom-0 inset-x-0 z-20"><div class="mx-auto max-w-xl lg:max-w-6xl px-4 pb-3"><div class="rounded-2xl border border-stone-200 bg-white shadow-xl p-2.5">'+
+  return '<div class="fixed bottom-0 inset-x-0 z-20"><div class="mx-auto max-w-xl lg:max-w-3xl px-4 pb-3"><div class="rounded-2xl border border-stone-200 bg-white shadow-xl p-2.5">'+
     '<div class="flex gap-1.5 mb-1.5">'+
       '<button data-act="printAll" class="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg border border-stone-300 py-1.5 text-[11px] font-semibold text-stone-700">'+icon("printer",13)+' طباعة الكل (حسب الفلتر)</button>'+
       '<button data-act="printSelected" class="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 py-1.5 text-[11px] font-semibold text-emerald-700">'+icon("printer",13)+' طباعة المحدد ✓</button>'+
@@ -1565,6 +1602,7 @@ function unitDuePayments(u){
 function buildReport(){
   const r=state.report||{}; const res=[];
   state.owners.forEach(o=>{
+    if(r.benKey && benKey(o)!==r.benKey) return;   // عزل مجموعة المستفيد يشمل الطباعة والتصدير
     const rows=[];
     o.units.forEach(u=>{ if(!unitVisible(u)||unitExcluded(u))return; unitDuePayments(u).forEach(p=>{ if(inRange(p.dueDate,r.from,r.to)) rows.push({u,p}); }); });
     if(rows.length){ rows.sort((a,b)=>ymdToUTC(a.p.dueDate)-ymdToUTC(b.p.dueDate)); res.push({o,rows,subtotal:rows.reduce((s,x)=>s+x.p.amount,0),earliest:rows[0].p.dueDate}); }
@@ -1654,7 +1692,7 @@ function exportReportExcel(){
   const wb=XLSX.utils.book_new(); wb.Workbook={Views:[{RTL:true}]};
   XLSX.utils.book_append_sheet(wb,ws,"المستحقات"); XLSX.writeFile(wb,"تقرير المستحقات - "+stamp()+".xlsx");
 }
-const PRINT_CSS="*{font-family:'IBM Plex Sans Arabic',Arial,sans-serif;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact;}body{margin:0;color:#1c1917;font-size:12px;line-height:1.45;}.wrap{padding:20px 24px;}.rh{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #1c1917;padding-bottom:8px;margin-bottom:13px;}.rh-co{font-size:16px;font-weight:700;letter-spacing:-.3px;}.rh-en{font-size:8px;color:#a8a29e;letter-spacing:1.5px;}.rh-title{font-size:13px;font-weight:700;text-align:left;}.rh-meta{font-size:9.5px;color:#78716c;text-align:left;margin-top:1px;}.totbar{background:#1c1917;color:#fff;padding:8px 13px;border-radius:7px;display:flex;justify-content:space-between;align-items:center;font-weight:700;margin-bottom:12px;font-size:11px;}.totbar .v{font-variant-numeric:tabular-nums;font-size:15px;}table{width:100%;border-collapse:collapse;}thead th{background:#f5f5f4;color:#57534e;font-weight:600;font-size:9px;letter-spacing:.2px;padding:5px 8px;text-align:right;border-bottom:1px solid #e7e5e4;white-space:nowrap;}tbody td{padding:4.5px 8px;font-size:11px;border-bottom:1px solid #f1f0ef;vertical-align:top;}.num{text-align:left;font-variant-numeric:tabular-nums;white-space:nowrap;font-weight:700;}.date{text-align:left;font-variant-numeric:tabular-nums;white-space:nowrap;direction:ltr;color:#57534e;font-size:10px;}.mono{font-family:ui-monospace,Menlo,monospace;font-size:9px;color:#a8a29e;}.muted{color:#78716c;font-size:10px;}.tg{display:inline-block;font-size:8.5px;border:1px solid #e0e0e0;border-radius:7px;padding:0 4px;color:#57534e;}.grp td{background:#f5f5f4;font-weight:700;font-size:11px;border-top:1.5px solid #e7e5e4;}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-left:5px;vertical-align:middle;}.sec{border:1px solid #e7e5e4;border-radius:8px;margin-bottom:9px;overflow:hidden;page-break-inside:avoid;}.sec-h{display:flex;justify-content:space-between;align-items:center;background:#f5f5f4;padding:6px 11px;font-weight:700;font-size:12px;}.sec-h .v{font-variant-numeric:tabular-nums;}.sec-sub{font-size:10px;color:#57534e;padding:4px 11px;border-bottom:1px solid #f1f0ef;}.tot{margin-top:11px;border-top:2px solid #1c1917;padding-top:7px;text-align:left;font-size:13px;font-weight:700;}.rf{margin-top:14px;border-top:1px solid #e7e5e4;padding-top:6px;font-size:9px;color:#a8a29e;display:flex;justify-content:space-between;}.uid{font-weight:600;}.psub{font-size:9px;color:#a8a29e;margin-top:1px;}.cehint{font-size:9px;color:#9333ea;margin-top:2px;font-weight:600;}.smt{width:100%;border-collapse:collapse;}.smt th{background:#f5f5f4;color:#57534e;font-weight:600;font-size:9.5px;padding:5px 9px;text-align:right;border-bottom:1.5px solid #e7e5e4;}.smt td{padding:5px 9px;font-size:11px;border-bottom:1px solid #f1f0ef;}.smt .num{text-align:left;font-variant-numeric:tabular-nums;font-weight:700;}.smt .sq{text-align:center;color:#78716c;font-weight:700;}.smt .onm{font-weight:600;vertical-align:top;}.smt .sq{vertical-align:top;}.smt .num{vertical-align:top;}.smt .ucol,.smt .dcol,.smt .mcol{vertical-align:top;font-size:10px;}.smt .mcol{text-align:center;color:#57534e;font-variant-numeric:tabular-nums;}.smt .ucol{direction:ltr;text-align:right;color:#44403c;}.smt .ul{line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}.smt .ul+.ul{border-top:1px dotted #eeedec;}.smt .dt{direction:ltr;text-align:right;color:#57534e;font-variant-numeric:tabular-nums;}.smt a{color:inherit;text-decoration:none;}.smt tfoot .gt td{background:#f5f5f4;font-weight:800;font-size:11.5px;border-top:2px solid #a8a29e;}.seqb{display:inline-block;min-width:15px;text-align:center;background:#e7e5e4;color:#44403c;border-radius:5px;font-size:9px;padding:0 3px;margin-left:4px;text-decoration:none;}.hint{font-size:8.5px;color:#a8a29e;padding:5px 9px;}.pgbrk{page-break-after:always;}.estg{color:#b45309;font-size:8px;border:1px solid #fde68a;border-radius:5px;padding:0 4px;background:#fffbeb;font-weight:600;}.bynd{color:#b91c1c;font-size:8px;border:1px solid #fecaca;border-radius:5px;padding:0 4px;background:#fef2f2;font-weight:600;}.perd{font-size:11px;color:#44403c;margin-top:2px;direction:rtl;font-variant-numeric:tabular-nums;}.usub{font-size:9px;color:#a8a29e;margin-top:1px;}.beds{font-size:8px;color:#57534e;border:1px solid #e7e5e4;border-radius:6px;padding:0 4px;white-space:nowrap;}tbody tr{page-break-inside:avoid;}.page{page-break-after:always;}.page:last-child{page-break-after:auto;}@media print{.wrap{padding:10px 12px;}thead{display:table-header-group;}}";
+const PRINT_CSS="*{font-family:'IBM Plex Sans Arabic',Arial,sans-serif;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact;}body{margin:0;color:#1c1917;font-size:12px;line-height:1.45;}.wrap{padding:20px 24px;}.rh{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #1c1917;padding-bottom:8px;margin-bottom:13px;}.rh-co{font-size:16px;font-weight:700;letter-spacing:-.3px;}.rh-en{font-size:8px;color:#a8a29e;letter-spacing:1.5px;}.rh-title{font-size:13px;font-weight:700;text-align:left;}.rh-meta{font-size:9.5px;color:#78716c;text-align:left;margin-top:1px;}.totbar{background:#1c1917;color:#fff;padding:8px 13px;border-radius:7px;display:flex;justify-content:space-between;align-items:center;font-weight:700;margin-bottom:12px;font-size:11px;}.totbar .v{font-variant-numeric:tabular-nums;font-size:15px;}table{width:100%;border-collapse:collapse;}thead th{background:#f5f5f4;color:#57534e;font-weight:600;font-size:9px;letter-spacing:.2px;padding:5px 8px;text-align:right;border-bottom:1px solid #e7e5e4;white-space:nowrap;}tbody td{padding:4.5px 8px;font-size:11px;border-bottom:1px solid #f1f0ef;vertical-align:top;}.num{text-align:left;font-variant-numeric:tabular-nums;white-space:nowrap;font-weight:700;}.date{text-align:left;font-variant-numeric:tabular-nums;white-space:nowrap;direction:ltr;color:#57534e;font-size:10px;}.mono{font-family:ui-monospace,Menlo,monospace;font-size:9px;color:#a8a29e;}.muted{color:#78716c;font-size:10px;}.tg{display:inline-block;font-size:8.5px;border:1px solid #e0e0e0;border-radius:7px;padding:0 4px;color:#57534e;}.grp td{background:#f5f5f4;font-weight:700;font-size:11px;border-top:1.5px solid #e7e5e4;}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-left:5px;vertical-align:middle;}.sec{border:1px solid #e7e5e4;border-radius:8px;margin-bottom:9px;overflow:hidden;page-break-inside:avoid;}.sec-h{display:flex;justify-content:space-between;align-items:center;background:#f5f5f4;padding:6px 11px;font-weight:700;font-size:12px;}.sec-h .v{font-variant-numeric:tabular-nums;}.sec-sub{font-size:10px;color:#57534e;padding:4px 11px;border-bottom:1px solid #f1f0ef;}.tot{margin-top:11px;border-top:2px solid #1c1917;padding-top:7px;text-align:left;font-size:13px;font-weight:700;}.rf{margin-top:14px;border-top:1px solid #e7e5e4;padding-top:6px;font-size:9px;color:#a8a29e;display:flex;justify-content:space-between;}.uid{font-weight:600;}.psub{font-size:9px;color:#a8a29e;margin-top:1px;}.cehint{font-size:9px;color:#9333ea;margin-top:2px;font-weight:600;}.smt{width:100%;border-collapse:collapse;}.smt th{background:#f5f5f4;color:#57534e;font-weight:600;font-size:9.5px;padding:5px 9px;text-align:right;border-bottom:1.5px solid #e7e5e4;}.smt td{padding:5px 9px;font-size:11px;border-bottom:1px solid #f1f0ef;}.smt .num{text-align:left;font-variant-numeric:tabular-nums;font-weight:700;}.smt .sq{text-align:center;color:#78716c;font-weight:700;}.smt .onm{font-weight:600;vertical-align:top;}.smt .sq{vertical-align:top;}.smt .num{vertical-align:top;}.smt .ucol,.smt .dcol,.smt .mcol{vertical-align:top;font-size:10px;}.smt .mcol{text-align:center;color:#57534e;font-variant-numeric:tabular-nums;}.smt .ucol{direction:ltr;text-align:right;color:#44403c;}.smt .ul{line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}.smt .ul+.ul{border-top:1px dotted #eeedec;}.smt .dt{direction:ltr;text-align:right;color:#57534e;font-variant-numeric:tabular-nums;}.smt a{color:inherit;text-decoration:none;}.smt tfoot .gt td{background:#f5f5f4;font-weight:800;font-size:11.5px;border-top:2px solid #a8a29e;}.seqb{display:inline-block;min-width:15px;text-align:center;background:#e7e5e4;color:#44403c;border-radius:5px;font-size:9px;padding:0 3px;margin-left:4px;text-decoration:none;}.hint{font-size:8.5px;color:#a8a29e;padding:5px 9px;}.ownhd td{background:#faf9f8;font-weight:700;font-size:11px;color:#292524;border-top:1.5px solid #e7e5e4;border-bottom:1px solid #e7e5e4;}.ownhd .num{font-variant-numeric:tabular-nums;}.grandrow td{background:#1c1917;color:#fff;font-weight:800;font-size:12px;}.grandrow .num{font-variant-numeric:tabular-nums;}.pgbrk{page-break-after:always;}.estg{color:#b45309;font-size:8px;border:1px solid #fde68a;border-radius:5px;padding:0 4px;background:#fffbeb;font-weight:600;}.bynd{color:#b91c1c;font-size:8px;border:1px solid #fecaca;border-radius:5px;padding:0 4px;background:#fef2f2;font-weight:600;}.perd{font-size:11px;color:#44403c;margin-top:2px;direction:rtl;font-variant-numeric:tabular-nums;}.usub{font-size:9px;color:#a8a29e;margin-top:1px;}.beds{font-size:8px;color:#57534e;border:1px solid #e7e5e4;border-radius:6px;padding:0 4px;white-space:nowrap;}tbody tr{page-break-inside:avoid;}.page{page-break-after:always;}.page:last-child{page-break-after:auto;}@media print{.wrap{padding:10px 12px;}thead{display:table-header-group;}}";
 const DOC_EXTRA=".osec{page-break-inside:avoid;margin-bottom:0;}.osec+.osec{margin-top:16px;border-top:2px dashed #d6d3d1;padding-top:16px;}.ocnt{font-weight:400;font-size:9.5px;color:#78716c;}.gtop{display:flex;justify-content:space-between;align-items:center;border:1.5px solid #d6d3d1;background:#fafaf9;border-radius:8px;padding:8px 13px;font-weight:800;font-size:12px;margin-bottom:12px;}.gtop .v{font-size:14px;font-variant-numeric:tabular-nums;}table.dt{width:100%;border-collapse:collapse;table-layout:fixed;}table.dt th{background:#f5f5f4;color:#57534e;font-weight:600;font-size:9px;padding:5px 8px;text-align:right;border-bottom:1.5px solid #e7e5e4;white-space:nowrap;}table.dt td{padding:5px 8px;font-size:11px;border-bottom:1px solid #f1f0ef;overflow:hidden;text-overflow:ellipsis;}table.dt .num{text-align:left;font-variant-numeric:tabular-nums;white-space:nowrap;font-weight:700;}table.dt thead .num{font-weight:600;}table.dt .cnt{text-align:center;color:#78716c;}.dt .u td{border-top:1.5px solid #e7e5e4;}.dt .u .unm{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}.dt .tot{font-weight:800;}.dt .sub td{background:#fcfcfb;font-size:9.5px;color:#57534e;border-bottom:1px dotted #eee;}.dt .subm{padding-right:16px;text-align:right;color:#78716c;}.dt .uid{font-weight:700;}.dt .psub{font-size:9px;color:#a8a29e;font-weight:400;margin-top:1px;}.dt .perd{font-size:10.5px;color:#44403c;font-weight:400;margin-top:2px;direction:rtl;font-variant-numeric:tabular-nums;}.dt .beds{font-size:8px;color:#57534e;border:1px solid #e7e5e4;border-radius:6px;padding:0 4px;margin-right:2px;white-space:nowrap;}.dt tfoot .gt td{background:#f5f5f4;color:#1c1917;font-weight:800;font-size:11.5px;padding:7px 10px;border-top:2px solid #a8a29e;}.dt tfoot .gt .num{font-size:13.5px;text-align:left;}";
 function reportShell(title,filterLine,bodyHtml){
   const ds=a=>a?(String(a.d).padStart(2,"0")+"/"+String(a.m).padStart(2,"0")+"/"+a.y):"";
@@ -1685,6 +1723,7 @@ function ownerDocsHTML(owners){
         rows+="<tr class='u'><td class='unm'>"+id+"<div class='psub muted'>"+lbl+"</div></td><td></td><td class='cnt'>"+b.count+"</td><td class='num tot'>"+fmt(b.total)+"</td></tr>";
         b.lines.forEach(l=>{ if(l.estimated&&!l.beyond)missSet.add(monLabelEn(l.idx)); const price=l.partial?("<span dir='ltr' style='color:#b45309'>"+fmt(l.due)+" − "+fmt(l.paid)+"</span>"):fmt(l.value); const etag=l.beyond?" <span class='bynd'>بعد نهاية العقد</span>":(l.estimated?" <span class='estg'>تقديري</span>":"");
           rows+="<tr class='sub'><td class='subm'><span dir='ltr'>"+monLabelEn(l.idx)+"</span>"+etag+"<div class='perd'>"+per(l.from,l.to)+"</div></td><td class='num'>"+price+"</td><td class='cnt'>1</td><td class='num'>"+fmt(l.value)+"</td></tr>"; });
+        if(b.blocked){ rows+="<tr class='sub'><td class='subm' colspan='4' style='color:#b91c1c;font-weight:700'>⚠ قيمة القسط ناقصة (صفر) في "+b.gapMonths.map(i=>monLabelEn(i)).join("، ")+" — يُراجع قبل السداد</td></tr>"; }
       }
     });
     const instaPhone=isInsta(o)&&!norm(o.bank);
@@ -1724,7 +1763,8 @@ function ownerDocSection(o){
       const lead=b.count>1?(b.count+' شهر × '):'';
       detail='<div class="text-[11px] text-stone-600 mt-1 flex flex-wrap gap-x-2 gap-y-0.5">'
         +'<span>'+lead+'<span class="text-stone-400">سعر الشهر</span> <span class="tnum font-semibold">'+fmt(b.perMonth)+'</span>'+(b.count>1?' = <span class="tnum font-semibold">'+fmt(b.total)+'</span>':'')+'</span>'
-        +'<span class="text-stone-400">· '+periodAr(b.lines[0].from,b.lines[b.lines.length-1].to)+'</span></div>';
+        +'<span class="text-stone-400">· '+periodAr(b.lines[0].from,b.lines[b.lines.length-1].to)+'</span></div>'
+        +(b.blocked?'<div class="mt-1 text-[11px] font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg px-2 py-1">⚠ قيمة القسط ناقصة (صفر) في '+b.gapMonths.map(i=>monLabel(i)).join("، ")+' — صحّحها قبل السداد</div>':"");
     } else {
       detail='<div class="mt-1 space-y-1">'+b.lines.map(l=>{ if(l.estimated&&!l.beyond)missSet.add(monLabel(l.idx));
         const price=l.partial
@@ -1734,7 +1774,9 @@ function ownerDocSection(o){
           +'<span class="text-stone-400">'+monLabel(l.idx)+(l.beyond?' <span class="text-[9px] text-red-700 border border-red-200 bg-red-50 rounded px-1">بعد نهاية العقد</span>':(l.estimated?' <span class="text-[9px] text-amber-700 border border-amber-200 bg-amber-50 rounded px-1">تقديري</span>':''))+'</span>'
           +'<span>'+price+'</span>'
           +'<span class="text-stone-400">· '+periodAr(l.from,l.to)+'</span></div>';
-      }).join("")+'</div>';
+      }).join("")+
+        (b.blocked?'<div class="text-[11px] font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg px-2 py-1">⚠ قيمة القسط ناقصة (صفر) في '+b.gapMonths.map(i=>monLabel(i)).join("، ")+' — صحّحها قبل السداد</div>':"")+
+      '</div>';
     }
     return '<div class="py-2 border-t border-stone-100 first:border-t-0"><div class="flex justify-between items-start gap-2"><span class="text-xs font-semibold">'+head+'</span><span class="tnum font-bold text-sm shrink-0">'+fmt(b.total)+'</span></div>'+detail+'</div>';
   }).join("");
@@ -1754,7 +1796,41 @@ function printReport(){
   const ds=a=>a?(String(a.d).padStart(2,"0")+"/"+String(a.m).padStart(2,"0")+"/"+a.y):"";
   const r=state.report; const rangeTxt=(r.from||r.to)?((r.from?ds(r.from):"البداية")+" — "+(r.to?ds(r.to):"النهاية")):"كل المستحقات";
   let grand=0, body="";
-  data.forEach(g=>{ let rws="";
+  // وضع «تجميع المستفيد»: كشف واحد باسم المستفيد، والملاك عناوين فرعية جوّاه
+  const benMode = r.benKey && data.length && data.every(g=>benKey(g.o)===r.benKey);
+  if(benMode){
+    const o0=data[0].o;
+    const instaP=isInsta(o0)&&!norm(o0.bank);
+    const bankLine=[((o0.payMethods||[]).length?("الدفع: "+o0.payMethods.join(" / ")):""),
+      (o0.benName?("المستفيد: "+o0.benName):""),
+      (instaP?("إنستاباي: "+egPhone(o0.benAcc)):((o0.bank?("بنك: "+o0.bank+" · "):"")+(o0.benAcc?("حساب: "+o0.benAcc):"")))].filter(Boolean).join(" — ");
+    let rws="", unitsN=0;
+    data.forEach(g=>{
+      grand+=g.subtotal;
+      rws+="<tr class='ownhd'><td colspan='4'>"+esc(g.o.name)+"</td><td class='num'>"+fmt(g.subtotal)+"</td></tr>";
+      g.rows.forEach(x=>{ const p=x.p,u=x.u; unitsN++;
+        const perM=p.months?Math.round(p.gross/p.months):p.gross;
+        const partNote=p.partial?" <span style='color:#b45309;font-weight:400;font-size:9px'>(مدفوع "+fmt(p.paid)+")</span>":"";
+        const etag=p.beyond?" <span class='bynd'>بعد نهاية العقد</span>":(p.estimated?" <span class='estg'>تقديري</span>":"");
+        const ce=snapMonthEnd(u.contractEnd);
+        const sub2=[norm(u.beds)?esc(u.beds)+" غرفة":"", ce?("نهاية العقد "+ds(ce)):""].filter(Boolean).join(" · ");
+        rws+="<tr><td class='date'>"+ds(p.dueDate)+"</td>"+
+          "<td><div class='uid'>"+esc([u.project,(norm(u.block)+norm(u.bldg)),u.apt].filter(Boolean).join(" "))+" <span class='mono'>("+esc(u.code)+")</span>"+etag+"</div>"+
+            "<div class='perd'>من <span dir='ltr'>"+ds(p.from)+"</span> إلى <span dir='ltr'>"+ds(p.to)+"</span></div>"+
+            (sub2?"<div class='usub'>"+sub2+"</div>":"")+"</td>"+
+          "<td class='num'>"+fmt(perM)+partNote+"</td>"+
+          "<td style='text-align:center'>"+p.months+"</td>"+
+          "<td class='num'>"+fmt(p.amount)+"</td></tr>";
+      });
+    });
+    body="<div class='sec'><div class='sec-h'><span>"+esc(norm(o0.benName)||"مستفيد")+"</span><span class='v'>"+fmt(grand)+" ج.م</span></div>"+
+      (bankLine?"<div class='sec-sub'>"+esc(bankLine)+"</div>":"")+
+      "<div class='sec-sub'>تحويل واحد يشمل "+data.length+" مالك · "+unitsN+" دفعة</div>"+
+      "<table style='table-layout:fixed'><colgroup><col style='width:13%'><col style='width:37%'><col style='width:17%'><col style='width:8%'><col style='width:25%'></colgroup>"+
+      "<thead><tr><th>الاستحقاق</th><th>الوحدة</th><th class='num'>سعر الشهر</th><th style='text-align:center'>شهور</th><th class='num'>الإجمالي</th></tr></thead><tbody>"+rws+
+      "<tr class='grandrow'><td colspan='4'>إجمالي التحويل للمستفيد</td><td class='num'>"+fmt(grand)+"</td></tr></tbody></table></div>";
+  }
+  if(!benMode) data.forEach(g=>{ let rws="";
     g.rows.forEach(x=>{const p=x.p,u=x.u;
       const perM=p.months?Math.round(p.gross/p.months):p.gross;
       const partNote=p.partial?" <span style='color:#b45309;font-weight:400;font-size:9px'>(مدفوع "+fmt(p.paid)+")</span>":"";
@@ -1802,7 +1878,7 @@ function printReport(){
       "<td class='dcol'>"+dueCell+"</td>"+
       "<td class='mcol'>"+monCell+"</td>"+
       "<td class='num'>"+fmt(g.subtotal)+"</td></tr>"; });
-  const summary="<div class='sec' id='summary'><div class='sec-h'><span>كشف مختصر بالملاك <span style='font-weight:400;font-size:9.5px;color:#78716c'>(مرتّب بميعاد الاستحقاق)</span></span><span class='v'>"+data.length+" مالك</span></div>"+
+  const summary=benMode?"":"<div class='sec' id='summary'><div class='sec-h'><span>كشف مختصر بالملاك <span style='font-weight:400;font-size:9.5px;color:#78716c'>(مرتّب بميعاد الاستحقاق)</span></span><span class='v'>"+data.length+" مالك</span></div>"+
     "<table class='smt' style='table-layout:fixed'><colgroup><col style='width:6%'><col style='width:29%'><col style='width:23%'><col style='width:15%'><col style='width:7%'><col style='width:20%'></colgroup>"+
     "<thead><tr><th>#</th><th>المالك</th><th>الوحدة</th><th>الاستحقاق</th><th style='text-align:center'>شهور</th><th class='num'>الإجمالي</th></tr></thead>"+
     "<tbody>"+sumRows+"</tbody>"+
@@ -2038,7 +2114,7 @@ function renderSyncBar(){
     const busy=state.sbBusy;
     const txt=busy?"بيحفظ…":(SB.lastMsg||("متصل · "+SB.email));
     bar.className="border-b border-stone-200 bg-white/70";
-    bar.innerHTML='<div class="mx-auto max-w-xl lg:max-w-6xl px-4 py-1 flex items-center gap-2 text-[11px]">'+
+    bar.innerHTML='<div class="mx-auto max-w-xl lg:max-w-3xl px-4 py-1 flex items-center gap-2 text-[11px]">'+
       '<span class="inline-flex items-center gap-1 '+(busy?"text-stone-500":"text-emerald-700")+' font-semibold shrink-0">'+icon(busy?"cloud":"check",12)+' '+esc(txt)+'</span>'+
       '<div class="flex-1"></div>'+
       '<button data-act="openCloud" class="text-stone-500 underline shrink-0">السحابة</button></div>';
@@ -2051,7 +2127,7 @@ function renderSyncBar(){
     const txt=state.ghBusy?"بيحفظ…":(GH.lastMsg||"متصل بـ GitHub");
     const col=err?"text-red-700":(state.ghBusy?"text-stone-500":"text-emerald-700");
     bar.className="border-b "+cls;
-    bar.innerHTML='<div class="mx-auto max-w-xl lg:max-w-6xl px-4 py-1 flex items-center gap-2 text-[11px]">'+
+    bar.innerHTML='<div class="mx-auto max-w-xl lg:max-w-3xl px-4 py-1 flex items-center gap-2 text-[11px]">'+
       '<span class="inline-flex items-center gap-1 '+col+' font-semibold shrink-0">'+icon(state.ghBusy?"cloud":(err?"alert":"check"),12)+' '+esc(txt)+'</span>'+
       '<div class="flex-1"></div>'+
       '<button data-act="openCloud" class="text-stone-500 underline shrink-0">إعدادات</button></div>';
@@ -2061,7 +2137,7 @@ function renderSyncBar(){
   if(!SYNC_UI_ENABLED){ return; }
   if(!SYNC.supported){ bar.innerHTML=""; return; } // موبايل/متصفح غير مدعوم → استيراد/تصدير اليدوي زي ما هو
   const isFile = (typeof location!=="undefined" && location.protocol==="file:");
-  const wrap='<div class="mx-auto max-w-xl lg:max-w-6xl px-4 py-1.5 flex items-center gap-2 text-[11px]">';
+  const wrap='<div class="mx-auto max-w-xl lg:max-w-3xl px-4 py-1.5 flex items-center gap-2 text-[11px]">';
   if(isFile){
     bar.className="border-b border-amber-200 bg-amber-50";
     bar.innerHTML=wrap+'<span class="inline-flex items-center gap-1 text-amber-800 shrink-0">'+icon("cloud",13)+' المزامنة معطّلة</span>'+
