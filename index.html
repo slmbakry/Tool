@@ -549,12 +549,39 @@ const AUTO_KEY=APP_ID+":auto", BACKUP_DAYS=7, BACKUP_CHANGES=20;
 function load(){try{const raw=localStorage.getItem(STORAGE_KEY);if(raw){const p=JSON.parse(raw);state.owners=p.owners||[];state.meta=p.meta||null;state.tagModes=p.tagModes||{};state.backup=p.backup||{lastAt:null,changes:0};}}catch(e){} if(!state.backup)state.backup={lastAt:null,changes:0}; ensureTagModes(); }
 function save(){try{localStorage.setItem(STORAGE_KEY,JSON.stringify({owners:state.owners,meta:state.meta,tagModes:state.tagModes,backup:state.backup}));}catch(e){} scheduleSyncPush();}
 let _syncTimer=null, _ghTimer=null, _sbTimer=null;
+// ===== تتبّع التعديلات اللي لسه ما اترفعتش =====
+const PEND_KEY=APP_ID+":pending";
+function pendGet(){ try{ return JSON.parse(localStorage.getItem(PEND_KEY)||"null")||{n:0,since:null,lastErr:""}; }catch(e){ return {n:0,since:null,lastErr:""}; } }
+function pendSet(o){ try{ localStorage.setItem(PEND_KEY,JSON.stringify(o)); }catch(e){} }
+function pendBump(){ const p=pendGet(); p.n=(p.n||0)+1; if(!p.since)p.since=Date.now(); pendSet(p); }
+function pendClear(){ pendSet({n:0,since:null,lastErr:""}); }
+function pendFail(msg){ const p=pendGet(); p.lastErr=msg||"تعذّر الرفع"; pendSet(p); }
+function pendCount(){ return pendGet().n||0; }
+
+let _sbRetry=null, _sbRetryDelay=5000;
+function sbTryPush(isRetry){
+  if(!(typeof SB!=="undefined" && SB.signedIn)) return;
+  state.sbBusy=true; renderSyncBar();
+  SB.push().then(function(r){
+    state.sbBusy=false;
+    if(r&&r.ok){ pendClear(); _sbRetryDelay=5000; if(_sbRetry){clearTimeout(_sbRetry);_sbRetry=null;} }
+    else if(r&&r.silent){ /* مش مسجّل دخول */ }
+    else { pendFail((r&&r.msg)||"تعذّر الرفع"); if(r&&r.auth){ state.sbMsg=r.msg; state.sbOk=false; } scheduleRetry(); }
+    renderSyncBar();
+  }).catch(function(){ state.sbBusy=false; pendFail("تعذّر الاتصال"); scheduleRetry(); renderSyncBar(); });
+}
+function scheduleRetry(){
+  if(_sbRetry) clearTimeout(_sbRetry);
+  _sbRetry=setTimeout(function(){ _sbRetry=null; _sbRetryDelay=Math.min(_sbRetryDelay*2,60000); sbTryPush(true); }, _sbRetryDelay);
+}
+// لما النت يرجع، جرّب فورًا
+try{ window.addEventListener("online",function(){ if(pendCount()>0){ _sbRetryDelay=5000; sbTryPush(true); } }); }catch(e){}
+
 function scheduleSyncPush(){
-  // حفظ تلقائي على GitHub بعد كل تعديل (مؤجّل ثانيتين لتجميع التعديلات المتتالية)
-  try{ if(typeof SB!=="undefined" && SB.signedIn){ if(_sbTimer)clearTimeout(_sbTimer);
-      _sbTimer=setTimeout(function(){ state.sbBusy=true; renderSyncBar();
-        SB.push().then(function(r){ state.sbBusy=false; if(r&&r.auth){ state.sbMsg=r.msg; state.sbOk=false; } renderSyncBar(); }).catch(function(){ state.sbBusy=false; renderSyncBar(); });
-      },2000); return; }
+  // حفظ تلقائي على السحابة بعد كل تعديل (مؤجّل ثانيتين لتجميع التعديلات المتتالية)
+  try{ if(typeof SB!=="undefined" && SB.signedIn){ pendBump(); renderSyncBar();
+      if(_sbTimer)clearTimeout(_sbTimer);
+      _sbTimer=setTimeout(function(){ sbTryPush(false); },2000); return; }
   }catch(e){}
   try{ if(typeof GH!=="undefined" && GH.configured){ if(_ghTimer)clearTimeout(_ghTimer);
       _ghTimer=setTimeout(function(){ state.ghBusy=true; renderSyncBar();
@@ -1250,9 +1277,9 @@ function viewLoginGate(){
       (state.sbMsg?'<p class="text-[11px] text-center '+(state.sbOk?"text-emerald-700":"text-red-600")+'">'+esc(state.sbMsg)+'</p>':"")+
     '</div>'+
     (state.sbOffline?'<div class="rounded-2xl border border-amber-200 bg-amber-50 p-3 mt-3 text-[11px] text-amber-800 text-center">'+
-       'تعذّر الاتصال بالسحابة. تقدر تكمّل على البيانات المحفوظة على الجهاز ده.'+
-       '<button data-act="skipLogin" class="block w-full mt-2 rounded-xl border border-amber-300 bg-white py-2 text-[12px] font-semibold text-amber-900">فتح البيانات المحلية</button></div>':"")+
-    '<button data-act="skipLogin" class="w-full text-center text-[12px] text-stone-400 underline mt-4 py-2">استخدام بدون حساب (محلي فقط)</button>'+
+       'تعذّر الاتصال بالسحابة.'+(state.owners.length?' تقدر تفتح آخر نسخة محفوظة على الجهاز ده <b>للاطّلاع فقط</b>.':'')+
+       (state.owners.length?'<button data-act="openReadOnly" class="block w-full mt-2 rounded-xl border border-amber-300 bg-white py-2 text-[12px] font-semibold text-amber-900">فتح للاطّلاع فقط</button>':'')+'</div>':"")+
+    '<p class="text-center text-[11px] text-stone-400 mt-4">لازم تسجّل دخول عشان تفتح الأداة — البيانات كلها على السحابة.</p>'+
     '</div>';
 }
 function viewCloudSB(){
@@ -2146,8 +2173,28 @@ const SYNC_UI_ENABLED=false; // طبقة Dropbox القديمة — متوقفة
 function renderSyncBar(){
   const bar=document.getElementById("syncBar"); if(!bar)return;
   // شريط حالة التخزين السحابي (Supabase)
+  if(state.readOnly){
+    bar.className="border-b border-amber-300 bg-amber-50";
+    bar.innerHTML='<div class="mx-auto max-w-xl lg:max-w-3xl px-4 py-1.5 flex items-center gap-2 text-[11px]">'+
+      '<span class="inline-flex items-center gap-1 text-amber-900 font-bold shrink-0">'+icon("alert",13)+' اطّلاع فقط — مفيش اتصال</span>'+
+      '<span class="text-[10px] text-amber-700 truncate">'+(SB.remoteSavedAt?("آخر نسخة: "+new Date(SB.remoteSavedAt).toLocaleDateString("ar-EG")):"نسخة محفوظة على الجهاز")+'</span>'+
+      '<div class="flex-1"></div>'+
+      '<button data-act="openCloud" class="shrink-0 rounded-lg bg-amber-600 text-white px-2 py-0.5 text-[10px] font-bold">دخول</button></div>';
+    return;
+  }
   if(SB.signedIn){
-    const busy=state.sbBusy;
+    const busy=state.sbBusy; const pend=pendCount();
+    if(pend>0 && !busy){
+      // تحذير ثابت: فيه تعديلات لسه محليًا
+      const p=pendGet();
+      bar.className="border-b border-red-300 bg-red-50";
+      bar.innerHTML='<div class="mx-auto max-w-xl lg:max-w-3xl px-4 py-1.5 flex items-center gap-2 text-[11px]">'+
+        '<span class="inline-flex items-center gap-1 text-red-800 font-bold shrink-0">'+icon("alert",13)+' '+pend+' تعديل لسه محلي</span>'+
+        '<span class="text-[10px] text-red-600 truncate">'+esc(p.lastErr||"في انتظار الرفع…")+'</span>'+
+        '<div class="flex-1"></div>'+
+        '<button data-act="sbRetry" class="shrink-0 rounded-lg bg-red-600 text-white px-2 py-0.5 text-[10px] font-bold">إعادة المحاولة</button></div>';
+      return;
+    }
     const txt=busy?"بيحفظ…":(SB.lastMsg||("متصل · "+SB.email));
     bar.className="border-b border-stone-200 bg-white/70";
     bar.innerHTML='<div class="mx-auto max-w-xl lg:max-w-3xl px-4 py-1 flex items-center gap-2 text-[11px]">'+
@@ -2284,12 +2331,18 @@ app.addEventListener("click",function(e){
     m.collect=false; m.rows={}; window.scrollTo(0,0); render();
   }
   else if(act==="delPay"){ const f=findUnit(t.dataset.code); if(f){ removePayment(f.u, t.dataset.id); computeAll(); markChange(1); save(); render(); } }
+  // وضع الاطّلاع فقط: امنع أي إجراء بيغيّر البيانات
+  if(state.readOnly && ["edSave","oEdSave","recordPay","bulkConfirm","doClear","applyReplace","applyUpdate","revAccept","revKeep","revAcceptAll","revKeepAll","editUnit","editOwner","upload","restoreAuto","askClear","toggleCollect"].indexOf(act)>-1){
+    state.flash="وضع الاطّلاع فقط — سجّل دخول عشان تعدّل."; render(); return;
+  }
+  if(act==="sbRetry"){ _sbRetryDelay=5000; sbTryPush(true); }
+  else if(act==="openReadOnly"){ state.localOnly=true; state.readOnly=true; state.sbMsg=""; window.scrollTo(0,0); render(); }
   else if(act==="sbLogin"){ const G=id=>document.getElementById(id), gv=id=>{const e=G(id);return e?String(e.value||"").trim():"";};
     const mail=gv("sb-email"), pass=gv("sb-pass");
     if(!mail||!pass){ state.sbMsg="اكتب الإيميل والباسورد."; state.sbOk=false; render(); return; }
     state.sbMsg="بيسجّل الدخول…"; state.sbOk=true; render();
     SB.signIn(mail,pass).then(function(r){ state.sbOk=r.ok; state.sbMsg=r.msg; if(!r.ok){ if(/الإنترنت/.test(r.msg||""))state.sbOffline=true; render(); return; }
-      state.localOnly=false; state.sbOffline=false; SB.boot().then(function(bt){ state.sbMsg=(bt&&bt.msg)||r.msg; state.sbOk=!!(bt&&bt.ok); render(); }); }); }
+      state.localOnly=false; state.readOnly=false; state.sbOffline=false; SB.boot().then(function(bt){ state.sbMsg=(bt&&bt.msg)||r.msg; state.sbOk=!!(bt&&bt.ok); render(); }); }); }
   else if(act==="sbLogout"){ if(window.confirm("تسجيل الخروج؟ البيانات المحلية هتفضل زي ما هي.")){ SB.signOut(); state.localOnly=false; state.sbMsg="اتسجّل الخروج."; state.sbOk=true; state.view="main"; render(); } }
   else if(act==="sbPull"){ state.sbMsg="بيحمّل…"; state.sbOk=true; render();
     SB.pull().then(function(r){ if(r.ok&&r.obj){ SB.applySnapshot(r.obj); state.sbMsg="اتحمّلت البيانات ✓"; state.sbOk=true; }
@@ -2362,7 +2415,6 @@ app.addEventListener("click",function(e){
     state.banks = only ? new Set(all) : new Set([bk]);
     render(); }
   else if(act==="toggleMore"){ syncMainFromDOM(); state.moreOpen=!state.moreOpen; render(); }
-  else if(act==="skipLogin"){ state.localOnly=true; state.sbMsg=""; window.scrollTo(0,0); render(); }
   else if(act==="bankAll"){ syncMainFromDOM(); state.banks=new Set(allBanks()); render(); }
   else if(act==="bankOne"){ syncMainFromDOM(); const bk=t.dataset.b; const bs=bankSet(); const all=allBanks();
     if(bs.size===1&&bs.has(bk)) state.banks=new Set(all); else state.banks=new Set([bk]); render(); }
@@ -2693,7 +2745,15 @@ load(); computeAll(); if(state.owners.length && !loadAuto()) saveAuto(); render(
   const had=await SYNC.restoreHandle();
   if(had){ const r=await SYNC.autoPull(); if(r&&r.msg){ state.syncMsg=r.msg; } render(); }
 }catch(e){} })();
-window.addEventListener("beforeunload",function(){ try{ if(SYNC_UI_ENABLED && SYNC.connected) SYNC.writeFileQuiet(); }catch(e){} });
+window.addEventListener("beforeunload",function(e){
+  try{ if(SYNC_UI_ENABLED && SYNC.connected) SYNC.writeFileQuiet(); }catch(e2){}
+  // تحذير قبل الإغلاق لو فيه تعديلات لسه ما اترفعتش
+  try{ if(typeof SB!=="undefined" && SB.signedIn && pendCount()>0){
+      SB.push();                                  // محاولة أخيرة
+      e.preventDefault(); e.returnValue="فيه تعديلات لسه ما اترفعتش للسحابة.";
+      return e.returnValue;
+    } }catch(e3){}
+});
 </script>
 </body>
 </html>
