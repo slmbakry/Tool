@@ -188,11 +188,26 @@ function unitAnchor(u){ if(u&&u.anchorOverride&&u.anchorOverride.day) return {da
 // الأنكور المقترح من «مسدد حتى تاريخ» (اليوم اللي بعده = بداية الدورة)
 function anchorFromSettled(u){ if(!u||!u.settled)return null; const s=addDaysYmd(snapMonthEnd(u.settled),1); return {day:s.d,month:s.m}; }
 // وحدات فيها تعارض بين الدورة المستنتجة من نهاية العقد ودورة «مسدد حتى»
+// هل التاريخ ده آخر يوم في شهره؟
+function isMonthEnd(a){ if(!a)return false; return a.d===new Date(Date.UTC(a.y,a.m,0)).getUTCDate(); }
+// «مسدد حتى» مكتوب بيوم 1 أو 2 = على الأغلب بداية القسط مش نهايته
+function settledLooksShifted(u){
+  if(!u||!u.settled) return false;
+  if(u.settled.d>2) return false;
+  const ce=snapMonthEnd(u.contractEnd);
+  return isMonthEnd(ce);                       // بس لو نهاية العقد فعلاً آخر الشهر
+}
 function anchorReviews(){ const out=[];
   state.owners.forEach(o=>o.units.forEach(u=>{ if(!unitVisible(u))return;
+    if(u.anchorOverride||u.settledFixed)return;
     const cur=anchorOf(u.contractEnd), sug=anchorFromSettled(u);
-    if(!cur||!sug)return; if(u.anchorOverride)return; if(cur.day===sug.day)return;
-    out.push({o,u,cur,sug});
+    if(!cur||!sug)return; if(cur.day===sug.day)return;
+    if(settledLooksShifted(u)){
+      // اقتراح تصحيح التاريخ نفسه: «مسدد حتى» = اليوم اللي قبله (آخر الشهر)
+      out.push({o,u,cur,sug,kind:"settled",fixed:addDaysYmd(u.settled,-1)});
+    } else {
+      out.push({o,u,cur,sug,kind:"anchor"});
+    }
   }));
   return out;
 }
@@ -1378,32 +1393,68 @@ function viewReview(){
     '<p class="text-xs text-stone-500 mt-1">وحدات دورة السداد فيها متعارضة: المحسوب من <b>نهاية العقد</b> مختلف عن المستنتج من <b>«مسدد حتى تاريخ»</b>. راجع واعتمد الصح — مفيش أي تغيير بيحصل قبل موافقتك.</p></div>';
   if(!list.length) return head+'<p class="text-center text-stone-400 py-12 text-sm">مفيش حالات محتاجة مراجعة. 👌</p>'+metaFooter();
   const cards=list.map(r=>{ const u=r.u,o=r.o;
+    const hd='<div class="flex items-center justify-between gap-2 mb-1"><span class="font-mono text-[11px] text-stone-500">'+esc(u.code)+'</span>'+
+      '<span class="text-[11px] text-stone-500">'+esc(o.name)+'</span></div>'+
+      '<div class="text-sm font-semibold mb-2">'+esc([u.project,(norm(u.block)+norm(u.bldg)),u.apt].filter(Boolean).join(" "))+'</div>';
+    // ===== حالة: «مسدد حتى» مكتوب بداية القسط بدل نهايته =====
+    if(r.kind==="settled"){
+      const nextDue=addDaysYmd(r.fixed,1);
+      return '<div class="rounded-2xl border border-sky-300 bg-white p-3.5">'+hd+
+        '<div class="rounded-xl border border-sky-200 bg-sky-50 p-2.5 text-[11px] text-sky-900 leading-relaxed mb-2">'+
+          'مكتوب «مسدد حتى <b dir="ltr">'+ds(u.settled)+'</b>» — وده يوم بداية قسط مش نهايته.<br>'+
+          'الأرجح إن المقصود: <b>مسدد حتى '+ds(r.fixed)+'</b> والقسط الجاي <b>'+ds(nextDue)+'</b>.'+
+        '</div>'+
+        '<div class="grid grid-cols-2 gap-2 text-[11px] items-stretch">'+
+          '<div class="flex flex-col gap-2">'+
+            '<div class="flex-1 rounded-xl border border-stone-200 bg-stone-50 p-2">'+
+              '<div class="text-stone-500 mb-1">الحالي</div>'+
+              '<div class="font-semibold text-stone-700" dir="ltr">'+ds(u.settled)+'</div>'+
+              '<div class="text-[10px] text-stone-500 mt-1" dir="ltr">'+sample(u,r.sug)+'</div>'+
+            '</div>'+
+            '<button data-act="revKeep" data-code="'+esc(u.code)+'" class="rounded-xl border border-stone-300 bg-white py-2 text-[12px] font-medium text-stone-600">سيبه زي ما هو</button>'+
+          '</div>'+
+          '<div class="flex flex-col gap-2">'+
+            '<div class="flex-1 rounded-xl border border-sky-300 bg-sky-50 p-2">'+
+              '<div class="text-sky-800 mb-1">بعد التصحيح</div>'+
+              '<div class="font-semibold text-sky-900" dir="ltr">'+ds(r.fixed)+'</div>'+
+              '<div class="text-[10px] text-sky-800 mt-1" dir="ltr">'+sample(u,r.cur)+'</div>'+
+            '</div>'+
+            '<button data-act="revFixSettled" data-code="'+esc(u.code)+'" class="inline-flex items-center justify-center gap-1.5 rounded-xl bg-sky-600 text-white py-2 text-[12px] font-bold">'+icon("check",13)+' أكّد التصحيح</button>'+
+          '</div>'+
+        '</div>'+
+        '<p class="text-[10px] text-stone-400 mt-2">أكّد بس لو المستحق فعلاً مسدد لحد '+ds(r.fixed)+' ونهاية العقد آخر الشهر.</p>'+
+      '</div>';
+    }
     return '<div class="rounded-2xl border border-amber-200 bg-white p-3.5">'+
       '<div class="flex items-center justify-between gap-2 mb-1"><span class="font-mono text-[11px] text-stone-500">'+esc(u.code)+'</span>'+
         '<span class="text-[11px] text-stone-500">'+esc(o.name)+'</span></div>'+
       '<div class="text-sm font-semibold mb-2">'+esc([u.project,(norm(u.block)+norm(u.bldg)),u.apt].filter(Boolean).join(" "))+'</div>'+
-      '<div class="grid grid-cols-2 gap-2 text-[11px]">'+
-        '<div class="rounded-xl border border-stone-200 bg-stone-50 p-2">'+
-          '<div class="text-stone-500 mb-1">الحالي — من نهاية العقد</div>'+
-          '<div class="font-semibold text-stone-700">يوم '+r.cur.day+'</div>'+
-          '<div class="text-[10px] text-stone-500 mt-1" dir="ltr">'+sample(u,r.cur)+'</div>'+
-          '<div class="text-[10px] text-stone-400 mt-1">نهاية العقد '+ds(u.contractEnd)+'</div>'+
+      '<div class="grid grid-cols-2 gap-2 text-[11px] items-stretch">'+
+        // كل عمود = الخيار + زره تحته مباشرة
+        '<div class="flex flex-col gap-2">'+
+          '<div class="flex-1 rounded-xl border border-stone-200 bg-stone-50 p-2">'+
+            '<div class="text-stone-500 mb-1">الحالي — من نهاية العقد</div>'+
+            '<div class="font-semibold text-stone-700">يوم '+r.cur.day+'</div>'+
+            '<div class="text-[10px] text-stone-500 mt-1" dir="ltr">'+sample(u,r.cur)+'</div>'+
+            '<div class="text-[10px] text-stone-400 mt-1">نهاية العقد '+ds(u.contractEnd)+'</div>'+
+          '</div>'+
+          '<button data-act="revKeep" data-code="'+esc(u.code)+'" class="rounded-xl border border-stone-300 bg-white py-2 text-[12px] font-medium text-stone-600">سيب الحالي</button>'+
         '</div>'+
-        '<div class="rounded-xl border border-emerald-300 bg-emerald-50 p-2">'+
-          '<div class="text-emerald-800 mb-1">المقترح — من «مسدد حتى»</div>'+
-          '<div class="font-semibold text-emerald-900">يوم '+r.sug.day+'</div>'+
-          '<div class="text-[10px] text-emerald-800 mt-1" dir="ltr">'+sample(u,r.sug)+'</div>'+
-          '<div class="text-[10px] text-emerald-700 mt-1">مسدد حتى '+ds(u.settled)+'</div>'+
+        '<div class="flex flex-col gap-2">'+
+          '<div class="flex-1 rounded-xl border border-emerald-300 bg-emerald-50 p-2">'+
+            '<div class="text-emerald-800 mb-1">المقترح — من «مسدد حتى»</div>'+
+            '<div class="font-semibold text-emerald-900">يوم '+r.sug.day+'</div>'+
+            '<div class="text-[10px] text-emerald-800 mt-1" dir="ltr">'+sample(u,r.sug)+'</div>'+
+            '<div class="text-[10px] text-emerald-700 mt-1">مسدد حتى '+ds(u.settled)+'</div>'+
+          '</div>'+
+          '<button data-act="revAccept" data-code="'+esc(u.code)+'" class="inline-flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 text-white py-2 text-[12px] font-bold">'+icon("check",13)+' اعتمد المقترح</button>'+
         '</div>'+
-      '</div>'+
-      '<div class="flex gap-2 mt-2.5">'+
-        '<button data-act="revAccept" data-code="'+esc(u.code)+'" class="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 text-white py-2 text-[12px] font-bold">'+icon("check",13)+' اعتمد المقترح</button>'+
-        '<button data-act="revKeep" data-code="'+esc(u.code)+'" class="flex-1 rounded-xl border border-stone-300 bg-white py-2 text-[12px] font-medium text-stone-600">سيب الحالي</button>'+
       '</div></div>';
   }).join("");
   return head+
-    '<div class="flex gap-2 my-3"><button data-act="revAcceptAll" class="flex-1 inline-flex items-center justify-center gap-1.5 rounded-2xl bg-emerald-600 text-white py-2.5 text-sm font-bold">'+icon("check",15)+' اعتمد المقترح للكل ('+list.length+')</button>'+
-    '<button data-act="revKeepAll" class="flex-1 rounded-2xl border border-stone-300 bg-white py-2.5 text-sm font-medium text-stone-600">سيب الكل زي ما هو</button></div>'+
+    '<div class="grid grid-cols-2 gap-2 my-3">'+
+    '<button data-act="revKeepAll" class="rounded-2xl border border-stone-300 bg-white py-2.5 text-sm font-medium text-stone-600">سيب الكل زي ما هو</button>'+
+    '<button data-act="revAcceptAll" class="inline-flex items-center justify-center gap-1.5 rounded-2xl bg-emerald-600 text-white py-2.5 text-sm font-bold">'+icon("check",15)+' اعتمد المقترح للكل ('+list.length+')</button></div>'+
     '<div class="space-y-2">'+cards+'</div>'+metaFooter();
 }
 function viewOwnerEdit(){
@@ -1684,13 +1735,16 @@ function untilOptions(){
   const t=todayYmd(); const out=[];
   // كل مرشّح: يوم 10 أو 20 في الشهر الحالي أو الشهور الجاية، اللي >= النهارده
   let y=t.y, m=t.m;
-  for(let i=0;i<4 && out.length<4;i++){
-    [10,20].forEach(d=>{ if(out.length>=4)return; const c={y,m,d};
-      if(ymdToUTC(c)>=ymdToUTC(t)) out.push(c); });
+  for(let i=0;i<5 && out.length<5;i++){
+    const eom=new Date(Date.UTC(y,m,0)).getUTCDate();   // آخر يوم في الشهر
+    [10,20,eom].forEach(d=>{ if(out.length>=5)return; const c={y,m,d};
+      if(ymdToUTC(c)>=ymdToUTC(t) && !out.some(x=>x.y===c.y&&x.m===c.m&&x.d===c.d)) out.push(c); });
     m+=1; if(m>12){m=1;y+=1;}
   }
+  out.sort((a,b)=>ymdToUTC(a)-ymdToUTC(b));
   const MON=["يناير","فبراير","مارس","أبريل","مايو","يونيو","يوليو","أغسطس","سبتمبر","أكتوبر","نوفمبر","ديسمبر"];
-  return out.slice(0,4).map(d=>({d, label:d.d+" "+MON[d.m-1]}));
+  return out.slice(0,5).map(d=>{ const eom=new Date(Date.UTC(d.y,d.m,0)).getUTCDate();
+    return {d, label:(d.d===eom?("آخر "+MON[d.m-1]):(d.d+" "+MON[d.m-1]))}; });
 }
 function openReport(){ if(!state.report){state.report={from:null,to:null,preset:"two",expanded:new Set()}; applyPreset("two");} if(!state.report.expanded)state.report.expanded=new Set(); state.view="report"; state.owner=null; state.unit=null; window.scrollTo(0,0); render(); }
 function viewReport(){
@@ -2244,7 +2298,7 @@ function renderSyncBar(){
   bar.innerHTML=wrap+inner+'</div>';
 }
 function findUnit(code){for(const o of state.owners)for(const u of o.units)if(u.code===code)return {o,u};return null;}
-app.addEventListener("click",function(e){
+function handleClick(e){
   const t=e.target.closest("[data-act]"); if(!t)return;
   const act=t.dataset.act;
   if(act==="upload"){document.getElementById("fileInput").click();}
@@ -2363,13 +2417,23 @@ app.addEventListener("click",function(e){
   else if(act==="ghPush"){ state.ghMsg="بيحفظ…"; state.ghOk=true; state.ghBusy=true; render();
     GH.push().then(function(r){ state.ghBusy=false; state.ghMsg=r.msg||(r.ok?"اتحفظ ✓":"تعذّر الحفظ"); state.ghOk=!!r.ok; render(); }); }
   else if(act==="openReview"){ syncMainFromDOM(); state.view="review"; window.scrollTo(0,0); render(); }
+  else if(act==="revFixSettled"){ const f=findUnit(t.dataset.code); if(!f)return; const u=f.u;
+    if(!u.settled)return;
+    u.settled=addDaysYmd(u.settled,-1); u.settledManual=true; u.settledFixed=true; u.edited=true;
+    computeAll(); markChange(1); save(); state.flash="اتصحّح «مسدد حتى» ✓"; render(); }
   else if(act==="revAccept"){ const f=findUnit(t.dataset.code); if(!f)return; const sug=anchorFromSettled(f.u); if(!sug)return;
     f.u.anchorOverride={day:sug.day,month:sug.month}; f.u.edited=true; computeAll(); markChange(1); save(); state.flash="اتعمد المقترح للوحدة ✓"; render(); }
-  else if(act==="revKeep"){ const f=findUnit(t.dataset.code); if(!f)return; const cur=anchorOf(f.u.contractEnd); if(!cur)return;
+  else if(act==="revKeep"){ const f=findUnit(t.dataset.code); if(!f)return;
+    if(settledLooksShifted(f.u)){ f.u.settledFixed=true; f.u.edited=true; computeAll(); markChange(1); save(); state.flash="اتسجّل زي ما هو ✓"; render(); return; }
+    const cur=anchorOf(f.u.contractEnd); if(!cur)return;
     f.u.anchorOverride={day:cur.day,month:cur.month}; f.u.edited=true; computeAll(); markChange(1); save(); state.flash="اتسجّل الحالي زي ما هو ✓"; render(); }
-  else if(act==="revAcceptAll"){ const list=anchorReviews(); list.forEach(r=>{ const sug=anchorFromSettled(r.u); if(sug){ r.u.anchorOverride={day:sug.day,month:sug.month}; r.u.edited=true; } });
+  else if(act==="revAcceptAll"){ const list=anchorReviews(); list.forEach(r=>{
+      if(r.kind==="settled"){ if(r.u.settled){ r.u.settled=addDaysYmd(r.u.settled,-1); r.u.settledManual=true; r.u.settledFixed=true; r.u.edited=true; } return; }
+      const sug=anchorFromSettled(r.u); if(sug){ r.u.anchorOverride={day:sug.day,month:sug.month}; r.u.edited=true; } });
     computeAll(); markChange(1); save(); state.flash="اتعمد المقترح لـ"+list.length+" وحدة ✓"; render(); }
-  else if(act==="revKeepAll"){ const list=anchorReviews(); list.forEach(r=>{ const cur=anchorOf(r.u.contractEnd); if(cur){ r.u.anchorOverride={day:cur.day,month:cur.month}; r.u.edited=true; } });
+  else if(act==="revKeepAll"){ const list=anchorReviews(); list.forEach(r=>{
+      if(r.kind==="settled"){ r.u.settledFixed=true; r.u.edited=true; return; }
+      const cur=anchorOf(r.u.contractEnd); if(cur){ r.u.anchorOverride={day:cur.day,month:cur.month}; r.u.edited=true; } });
     computeAll(); markChange(1); save(); state.flash="اتسجّل الحالي لـ"+list.length+" وحدة ✓"; render(); }
   else if(act==="editOwner"){ const o=state.owner; if(!o)return; state.oDraft={name:o.name||"",bank:o.bank||"",benName:o.benName||"",benAcc:o.benAcc||"",phone:o.phone||"",payMethods:(o.payMethods||[]).join(" / ")}; state.editingOwner=true; window.scrollTo(0,0); render(); }
   else if(act==="oEdCancel"){ state.editingOwner=false; state.oDraft=null; render(); }
@@ -2426,7 +2490,9 @@ app.addEventListener("click",function(e){
   else if(act==="clearSearch"){state.query="";state._focusSearch=true;render();}
   else if(act==="mainSearchClear"){ensureMain().q="";render();}
   else if(act==="copyVal"){const v=t.dataset.val,l=t.dataset.lbl;copyText(v).then(ok=>{if(ok){state.copied=l;render();setTimeout(()=>{if(state.copied===l){state.copied=null;render();}},1300);}});}
-});
+}
+app.addEventListener("click",handleClick);
+(function(){ const sb=document.getElementById("syncBar"); if(sb) sb.addEventListener("click",handleClick); })();
 app.addEventListener("input",function(e){
   if(e.target.id==="clearWord"){ state.clearTyped=e.target.value; const was=state.clearOk; state.clearOk=(norm(e.target.value)===norm(CLEAR_WORD)); if(was!==state.clearOk){ state._focusClear=true; render(); } return; }
   if(e.target.id==="search"){state.query=e.target.value;state._focusSearch=true;render();}
