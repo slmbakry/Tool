@@ -951,6 +951,7 @@ function collectUnits(){const arr=[];state.owners.forEach(o=>o.units.forEach(u=>
 function ensureMain(){
   if(!state.report){ state.report={from:null,to:null,preset:"until",expanded:new Set(),status:"all",collect:false,source:"CIB OSOOL",sourceOther:"",payDate:todayYmd(),rows:{}}; const u0=untilOptions()[0]; if(u0){state.report.to=u0.d;} }
   if(!state.report.expanded) state.report.expanded=new Set();
+  if(!state.report.bankOpen) state.report.bankOpen=new Set();
   if(state.report.status==null) state.report.status="all";
   if(!state.report.source) state.report.source="CIB OSOOL";
   if(!state.report.payDate) state.report.payDate=todayYmd();
@@ -1102,8 +1103,13 @@ function viewMain(){
         '</div></div>';
     }
   }
+  const allOpen=data.length&&m.expanded.size>=data.length;
+  const expandBar=data.length?'<div class="flex items-center justify-between gap-2 mb-1.5 px-0.5">'+
+    '<span class="text-[11px] text-stone-400">'+data.length+' مالك</span>'+
+    '<button data-act="expandAll" class="inline-flex items-center gap-1 text-[11px] font-medium text-stone-500 border border-stone-200 bg-white rounded-lg px-2 py-1">'+
+      icon(allOpen?"x":"chevronDown",12)+' '+(allOpen?"اضغط الكل":"افتح الكل")+'</button></div>':"";
   const groups=data.map(g=>ownerCard(g,m)).join("");
-  return toolbar+search+filt+range+head+gapBanner+estBanner+benBanner+'<div class="mt-1 space-y-2.5">'+groups+'</div>'+(m.collect?'<div class="h-28"></div>'+collectionBar(m):metaFooter());
+  return toolbar+search+filt+range+head+gapBanner+estBanner+benBanner+expandBar+'<div class="space-y-2.5">'+groups+'</div>'+(m.collect?'<div class="h-28"></div>'+collectionBar(m):metaFooter());
 }
 function ownerCard(g,m){
   const o=g.o, isE=m.expanded.has(o.key), bank=norm(o.bank);
@@ -1133,21 +1139,47 @@ function ownerCard(g,m){
     subtotalHtml='<span class="text-base font-extrabold tnum shrink-0">'+fmt(g.subtotal)+'</span>';
   }
 
+  // ===== الكارت مضموم افتراضيًا: الأساسيات بس + سهم للفتح =====
+  const nUnits=new Set(g.rows.map(x=>x.u.code)).size;
+  const dd=daysDiff(g.earliest,todayYmd());
+  const dcol=dd<0?"text-red-600":(dd<=SOON_WINDOW?"text-amber-600":"text-stone-500");
+  const dlabel=dd<0?("متأخر "+(-dd)+"ي"):(dd===0?"النهارده":(dd<=SOON_WINDOW?("خلال "+dd+"ي"):fmtDate(g.earliest)));
+  const nChecked=m.collect?g.rows.filter(x=>{const r=m.rows[x.u.code];return r&&r.checked;}).length:0;
+
+  const headBar='<button data-act="cardToggle" data-key="'+esc(o.key)+'" class="w-full text-right px-3.5 py-3 active:bg-stone-50">'+
+      '<div class="flex items-center justify-between gap-2">'+
+        '<span class="font-bold text-sm truncate text-stone-900 inline-flex items-center gap-1 min-w-0">'+
+          icon(isE?"chevronDown":"arrowRight",13,"opacity-40 shrink-0")+'<span class="truncate">'+esc(o.name)+'</span>'+
+        '</span>'+
+        (shared&&!m.benKey?'<span class="shrink-0 inline-flex items-center gap-0.5 rounded-full bg-indigo-100 text-indigo-700 border border-indigo-200 px-1.5 py-0.5 text-[9px] font-bold">'+icon("user",9)+shared.owners.length+'</span>':"")+
+        subtotalHtml+
+      '</div>'+
+      '<div class="flex items-center justify-between gap-2 mt-1">'+
+        '<span class="text-[11px] inline-flex items-center gap-1.5 truncate min-w-0">'+
+          '<span class="'+dcol+' font-semibold shrink-0">'+dlabel+'</span>'+
+          '<span class="text-stone-300 shrink-0">·</span>'+
+          '<span class="text-stone-500 shrink-0">'+nUnits+' وحدة</span>'+
+          (bank?'<span class="text-stone-300 shrink-0">·</span><span class="text-stone-400 truncate">'+esc(bank)+'</span>':"")+
+        '</span>'+
+        (nChecked?'<span class="shrink-0 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-1.5 py-0.5">✓ '+nChecked+'</span>':"")+
+      '</div>'+
+    '</button>';
+
+  // التفاصيل تظهر بس لما الكارت مفتوح
+  const bodyHtml = isE ? (
+      '<div class="px-3.5 pb-2 flex items-center gap-1.5 border-b border-stone-100">'+
+        '<button data-act="openOwner" data-key="'+esc(o.key)+'" data-from="main" class="inline-flex items-center gap-1 text-[11px] font-medium text-stone-600 border border-stone-200 rounded-lg px-2 py-1">'+icon("user",12)+' صفحة المالك</button>'+
+        '<button data-act="printOwner" data-key="'+esc(o.key)+'" class="inline-flex items-center text-[11px] font-medium text-stone-600 border border-stone-200 rounded-lg px-2 py-1" title="طباعة ورقة المالك">'+icon("printer",12)+'</button>'+
+        '<button data-act="bankToggle" data-key="'+esc(o.key)+'" class="inline-flex items-center gap-1 text-[11px] font-medium '+(m.bankOpen&&m.bankOpen.has(o.key)?"text-stone-600 border-stone-200":"text-emerald-700 border-emerald-200 bg-emerald-50")+' border rounded-lg px-2 py-1">'+icon("landmark",12)+' بيانات التحويل</button>'+
+      '</div>'+
+      ((m.bankOpen&&m.bankOpen.has(o.key))?'<div class="px-3 py-2.5 bg-stone-50/70 border-b border-stone-100 space-y-1.5">'+ownerBankFields(o)+'</div>':"")+
+      (stepperRow?'<div class="px-3.5">'+stepperRow+'</div>':"")+
+      '<div class="divide-y divide-stone-100">'+rows+'</div>'
+    ) : "";
+
   return '<div class="rounded-2xl border border-stone-200 bg-white overflow-hidden shadow-sm flex mb-2.5 break-inside-avoid">'+
     '<div class="w-1 shrink-0 '+stripe+'"></div><div class="flex-1 min-w-0">'+
-    '<div class="px-3.5 py-3 border-b border-stone-100">'+
-      '<div class="flex items-center justify-between gap-2">'+
-        '<button data-act="openOwner" data-key="'+esc(o.key)+'" data-from="main" class="font-bold text-sm truncate text-right text-stone-900 inline-flex items-center gap-1 min-w-0">'+icon("arrowRight",13,"opacity-30 shrink-0")+'<span class="truncate">'+esc(o.name)+'</span></button>'+
-        (shared&&!m.benKey?'<button data-act="benGroup" data-k="'+esc(shared.key)+'" title="مستفيد مشترك مع '+(shared.owners.length-1)+' مالك" class="shrink-0 inline-flex items-center gap-0.5 rounded-full bg-indigo-100 text-indigo-700 border border-indigo-200 px-1.5 py-0.5 text-[9px] font-bold">'+icon("user",9)+shared.owners.length+'</button>':"")+
-        subtotalHtml+'</div>'+
-      '<div class="flex items-center justify-between gap-2 mt-1.5">'+
-        '<span class="text-[11px] text-stone-500 inline-flex items-center gap-1 truncate min-w-0">'+(bank?icon("landmark",11,"shrink-0")+'<span class="truncate">'+esc(bank)+'</span>':'<span class="text-stone-300">— بدون بنك</span>')+'</span>'+
-        '<span class="shrink-0 inline-flex items-center gap-1.5">'+
-          '<button data-act="printOwner" data-key="'+esc(o.key)+'" class="inline-flex items-center text-[11px] font-medium text-stone-600 border border-stone-200 rounded-lg px-2 py-1" title="طباعة ورقة المالك">'+icon("printer",12)+'</button>'+
-          '<button data-act="rToggle" data-key="'+esc(o.key)+'" class="inline-flex items-center gap-1 text-[11px] font-medium '+(isE?"text-stone-600 border-stone-200":"text-emerald-700 border-emerald-200 bg-emerald-50")+' border rounded-lg px-2 py-1">'+icon(isE?"x":"landmark",12)+' '+(isE?"إخفاء":"بيانات التحويل")+'</button>'+
-        '</span>'+
-      '</div>'+stepperRow+'</div>'+detail+
-    '<div class="divide-y divide-stone-100">'+rows+'</div></div></div>';
+    headBar+bodyHtml+'</div></div>';
 }
 function unitInfoBtn(u){
   const info=[u.project,(norm(u.block)+norm(u.bldg)),u.apt].filter(Boolean).join(" ");
@@ -2461,6 +2493,11 @@ function handleClick(e){
     u.edited=true; state.editing=false; state.draft=null; computeAll(); markChange(1); save(); state.flash="اتحفظت تعديلات الوحدة ✓"; window.scrollTo(0,0); render(); }
   else if(act==="rPreset"){ syncMainFromDOM(); applyPreset(t.dataset.p); render(); }
   else if(act==="rUntil"){ syncMainFromDOM(); const m2=ensureMain(); m2.from=null; m2.to=inputToYmd(t.dataset.d); m2.preset="until"; render(); }
+  else if(act==="cardToggle"){ syncMainFromDOM(); const k=t.dataset.key; const s=ensureMain().expanded; if(s.has(k))s.delete(k); else s.add(k); render(); }
+  else if(act==="bankToggle"){ syncMainFromDOM(); const m2=ensureMain(); if(!m2.bankOpen)m2.bankOpen=new Set();
+    const k=t.dataset.key; if(m2.bankOpen.has(k))m2.bankOpen.delete(k); else m2.bankOpen.add(k); render(); }
+  else if(act==="expandAll"){ syncMainFromDOM(); const m2=ensureMain(); const all=buildReport().map(g=>g.o.key);
+    if(m2.expanded.size>=all.length && all.length){ m2.expanded=new Set(); } else { m2.expanded=new Set(all); } render(); }
   else if(act==="rToggle"){ syncMainFromDOM(); const k=t.dataset.key; const s=ensureMain().expanded; if(s.has(k))s.delete(k); else s.add(k); render(); }
   else if(act==="rExcel"){ syncMainFromDOM(); try{exportReportExcel();}catch(e){alert("تعذّر التصدير: "+e.message);} }
   else if(act==="rPdf"){ syncMainFromDOM(); try{printReport();}catch(e){alert("تعذّرت الطباعة: "+e.message);} }
