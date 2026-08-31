@@ -667,7 +667,7 @@ function pendClear(){ pendSet({n:0,since:null,lastErr:""}); }
 function pendFail(msg){ const p=pendGet(); p.lastErr=msg||"تعذّر الرفع"; pendSet(p); }
 function pendCount(){ return pendGet().n||0; }
 
-let _sbRetry=null, _sbRetryDelay=5000;
+let _sbRetry=null, _sbRetryDelay=5000, _applying=false;
 function sbTryPush(isRetry){
   if(!(typeof SB!=="undefined" && SB.signedIn)) return;
   state.sbBusy=true; renderSyncBar();
@@ -687,6 +687,7 @@ function scheduleRetry(){
 try{ window.addEventListener("online",function(){ if(pendCount()>0){ _sbRetryDelay=5000; sbTryPush(true); } }); }catch(e){}
 
 function scheduleSyncPush(){
+  if(_applying) return;   // إحنا بننزّل بيانات من السحابة — مش تعديل من المستخدم
   // حفظ تلقائي على السحابة بعد كل تعديل (مؤجّل ثانيتين لتجميع التعديلات المتتالية)
   try{ if(typeof SB!=="undefined" && SB.signedIn){ pendBump(); renderSyncBar();
       if(_sbTimer)clearTimeout(_sbTimer);
@@ -2543,7 +2544,10 @@ function handleClick(e){
     SB.pull().then(function(r){ if(r.ok&&r.obj){ SB.applySnapshot(r.obj); state.sbMsg="اتحمّلت البيانات ✓"; state.sbOk=true; }
       else { state.sbMsg=r.msg||"مفيش بيانات."; state.sbOk=!!r.ok; } render(); }); }
   else if(act==="sbPush"){ state.sbMsg="بيحفظ…"; state.sbOk=true; state.sbBusy=true; render();
-    SB.push().then(function(r){ state.sbBusy=false; state.sbMsg=r.msg||(r.ok?"اتحفظ ✓":"تعذّر الحفظ"); state.sbOk=!!r.ok; render(); }); }
+    SB.push().then(function(r){ state.sbBusy=false;
+      if(r&&r.ok){ pendClear(); if(_sbRetry){clearTimeout(_sbRetry);_sbRetry=null;} _sbRetryDelay=5000; }
+      else if(r&&!r.silent){ pendFail((r&&r.msg)||"تعذّر الرفع"); }
+      state.sbMsg=r.msg||(r.ok?"اتحفظ ✓":"تعذّر الحفظ"); state.sbOk=!!r.ok; render(); }); }
   else if(act==="openCloud"){ syncMainFromDOM(); state.view="cloud"; state.ghMsg=""; window.scrollTo(0,0); render(); }
   else if(act==="ghSave"){ const G=id=>document.getElementById(id), gv=id=>{const e=G(id);return e?String(e.value||"").trim():"";};
     const c={owner:gv("gh-owner"),repo:gv("gh-repo"),token:gv("gh-token"),branch:gv("gh-branch")||"main",path:gv("gh-path")||("data-"+APP_ID+".json")};
@@ -2884,9 +2888,14 @@ const SB = (function(){
   function snapshot(){ const data={}; appKeys().forEach(k=>{ data[k]=localStorage.getItem(k); });
     return { app:APP_ID, version:1, savedAt:new Date().toISOString(), data }; }
   function applySnapshot(obj){ if(!obj||!obj.data) return false;
-    appKeys().forEach(k=>{ if(!(k in obj.data)) localStorage.removeItem(k); });
-    Object.keys(obj.data).forEach(k=>{ if(k.indexOf(APP_ID+":")===0 && k!==SESS_KEY) localStorage.setItem(k, obj.data[k]); });
-    load(); computeAll(); return true; }
+    _applying=true;
+    try{
+      appKeys().forEach(k=>{ if(!(k in obj.data)) localStorage.removeItem(k); });
+      Object.keys(obj.data).forEach(k=>{ if(k.indexOf(APP_ID+":")===0 && k!==SESS_KEY) localStorage.setItem(k, obj.data[k]); });
+      load(); computeAll();
+    } finally { _applying=false; }
+    pendClear();          // اللي نزل من السحابة هو الأحدث — مفيش معلّق
+    return true; }
 
   async function pull(){ if(!signedIn()) return {ok:false,silent:true};
     if(!(await ensureFresh())) return {ok:false,msg:"انتهت الجلسة — سجّل دخول تاني.",auth:true};
@@ -2922,7 +2931,7 @@ const SB = (function(){
   async function boot(){ if(!signedIn()) return {ok:false,silent:true};
     const p=await pull();
     if(!p.ok) return p;
-    if(p.empty) return await push();
+    if(p.empty){ const r=await push(); if(r&&r.ok) pendClear(); return r; }
     applySnapshot(p.obj);
     return {ok:true,pulled:true,msg:"اتحمّلت البيانات من السحابة ✓"};
   }
