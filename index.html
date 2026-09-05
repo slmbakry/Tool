@@ -604,12 +604,17 @@ function recomputeSettled(u){
 function recordPayment(u,amount,dateYmd,source,note){
   const sorted=Object.keys(u.grid).map(Number).sort((a,b)=>a-b);
   const realIdx=sorted.filter(i=>u.grid[i].due>0);
+  const firstReal=realIdx.length?realIdx[0]:null;
   const lastReal=realIdx.length?realIdx[realIdx.length-1]:null;
   let remaining=amount; const allocated=[]; let hitGap=false;
   for(const idx of sorted){
     const g=u.grid[idx];
-    // شهر قسطه صفر ومسبوق ومتبوع بأقساط = فجوة بيانات: نوقف هنا ولا نقفز فوقها
-    if(!(g.due>0)){ if(lastReal!=null && idx<lastReal){ hitGap=true; break; } continue; }
+    // الفجوة الحقيقية = صفر بين أقساط حقيقية.
+    // الأصفار قبل أول قسط (شهور خارج العقد) أو بعد آخر قسط ما توقفش الترحيل.
+    if(!(g.due>0)){
+      if(firstReal!=null && lastReal!=null && idx>firstReal && idx<lastReal){ hitGap=true; break; }
+      continue;
+    }
     const need=g.due-g.paid; if(need<=0.0001)continue;
     const pay=Math.min(need,remaining); if(pay<=0)break;
     g.paid+=pay; remaining-=pay; allocated.push({idx,amt:pay});
