@@ -261,6 +261,19 @@ function blindBannerHTML(){
     (blind.length>8?'<div class="text-[10px] text-orange-700 mt-1">و'+(blind.length-8)+' وحدة كمان…</div>':'')+
     '<div class="text-[10px] text-orange-700 mt-1.5">سجّل قيمة الإيجار من شاشة الوحدة أو من الإكسل عشان تدخل في المستحقات.</div></div>';
 }
+// دفعات فيها فائض ما اترحّلش على أي شهر (نتيجة عطل الأصفار القديم)
+function stuckPayments(){
+  const out=[];
+  state.owners.forEach(o=>o.units.forEach(u=>{
+    (u.payments||[]).forEach(p=>{
+      const allocated=(p.allocated||[]).reduce((s,a)=>s+(a.amt||0),0);
+      const left=p.leftover||0;
+      if(left>0.01){ out.push({o,u,p,allocated,left,full:allocated<0.01}); }
+    });
+  }));
+  out.sort((a,b)=>(b.full-a.full)||(b.left-a.left));
+  return out;
+}
 function blindUnits(){
   const out=[];
   state.owners.forEach(o=>o.units.forEach(u=>{ if(!unitVisible(u)||unitExcluded(u))return;
@@ -1128,6 +1141,7 @@ function viewMain(){
     tBtn("rExcel","download","Excel","bg-emerald-50 text-emerald-800 border-emerald-200")+
     tBtn("openComp","layout","تقييم","bg-violet-50 text-violet-800 border-violet-200")+
     (nRev?tBtn("openReview","alert","مراجعة "+nRev,"bg-red-50 text-red-800 border-red-300"):"")+
+    ((function(){const ns=stuckPayments().length; return ns?tBtn("openStuck","alert","فائض "+ns,"bg-red-50 text-red-800 border-red-300"):"";})())+
     (hasTags?tBtn("openTags","tag","تسويات","bg-orange-50 text-orange-800 border-orange-200"):"")+
     tBtn("openCloud","cloud","سحابي",SB.signedIn?"bg-teal-50 text-teal-800 border-teal-200":"bg-stone-50 text-stone-500 border-stone-200")+
   '</div>':"")+
@@ -1177,6 +1191,14 @@ function viewMain(){
   data.forEach(g=>{ const seen={}; g.rows.forEach(x=>{ const u=x.u; if(seen[u.code])return; seen[u.code]=1;
       const bb=unitMonthsBreakdown(u,ownerMonthsFor(g.o));
       if(bb.blocked) gapUnits.push({u,o:g.o,months:bb.gapMonths.map(i=>monLabel(i)),shortBy:bb.shortBy}); }); });
+  // بانر: دفعات فيها فائض ما اترحّلش
+  const stuckList=stuckPayments();
+  const stuckBanner=stuckList.length?'<div class="rounded-xl border border-red-300 bg-red-50 px-3 py-2.5 mb-2.5">'+
+    '<div class="flex items-center justify-between gap-2">'+
+      '<div class="min-w-0"><div class="text-[11px] font-bold text-red-900">'+icon("alert",13)+' '+stuckList.length+' دفعة فيها فائض ما اترحّلش</div>'+
+      '<div class="text-[10px] text-red-700 mt-0.5">إجمالي '+fmt(stuckList.reduce((s,x)=>s+x.left,0))+' ج.م — راجعها وسجّلها من تاني</div></div>'+
+      '<button data-act="openStuck" class="shrink-0 rounded-xl bg-red-600 text-white px-3 py-1.5 text-[11px] font-bold">راجعها</button>'+
+    '</div></div>':'';
   const blindBanner=blindBannerHTML();
   const gapBanner=gapUnits.length?'<div class="rounded-xl border border-red-300 bg-red-50 px-3 py-2.5 mb-2.5">'+
     '<div class="text-[11px] font-bold text-red-800 mb-1">'+icon("alert",13)+' شهر ناقص في نص الجدول — '+gapUnits.length+' وحدة متوقفة عنده:</div>'+
@@ -1237,6 +1259,7 @@ function viewMain(){
       '<span class="text-[12px] font-bold '+(cls||"text-stone-800")+'">'+val+'</span></div>';
     const alerts=[];
     { const nb=blindUnits().length; if(nb) alerts.push({t:nb+" وحدة بلا إيجار مسجّل",c:"text-orange-700 bg-orange-50 border-orange-200",a:null}); }
+    { const ns=stuckPayments().length; if(ns) alerts.push({t:ns+" دفعة فيها فائض",c:"text-red-700 bg-red-50 border-red-300",a:"openStuck"}); }
     { const nr=anchorReviews().length; if(nr) alerts.push({t:nr+" حالة محتاجة مراجعة",c:"text-red-700 bg-red-50 border-red-200",a:"openReview"}); }
     { let nn=0; state.owners.forEach(o=>o.units.forEach(u=>{ nn+=((u._c&&u._c.alerts)||[]).length; })); if(nn) alerts.push({t:nn+" ملاحظة على البيانات",c:"text-amber-700 bg-amber-50 border-amber-200",a:"openNotes"}); }
     return '<aside class="hidden lg:block w-72 shrink-0">'+
@@ -1272,7 +1295,7 @@ function viewMain(){
     '<button data-act="expandAll" class="inline-flex items-center gap-1 text-[11px] font-medium text-stone-500 border border-stone-200 bg-white rounded-lg px-2 py-1">'+
       icon(allOpen?"x":"chevronDown",12)+' '+(allOpen?"اضغط الكل":"افتح الكل")+'</button></div>':"";
   const groups=data.map(g=>ownerCard(g,m)).join("");
-  return toolbar+search+filt+range+head+blindBanner+gapBanner+estBanner+benBanner+'<div class="lg:flex lg:gap-4 lg:items-start">'+
+  return toolbar+search+filt+range+head+stuckBanner+blindBanner+gapBanner+estBanner+benBanner+'<div class="lg:flex lg:gap-4 lg:items-start">'+
     '<div class="flex-1 min-w-0">'+expandBar+'<div class="space-y-2.5">'+groups+'</div>'+outOfRange+'</div>'+
     sideHTML+
   '</div>'+(m.collect?'<div class="h-28"></div>'+collectionBar(m):metaFooter());
@@ -1593,6 +1616,41 @@ function viewCloudGH(){
       'خلّي المستودع <b>Private</b> عشان بياناتك ما تكونش متاحة لحد.<br>'+
       'GitHub بيحتفظ بتاريخ كل نسخة — تقدر ترجع لأي نسخة قديمة من الموقع.'+
     '</div>'+metaFooter();
+}
+function viewStuck(){
+  const list=stuckPayments();
+  const head='<button data-act="back" data-to="main" class="inline-flex items-center gap-1.5 text-sm font-medium text-stone-600 mb-2">'+icon("arrowRight",16)+' رجوع</button>'+
+    '<div class="rounded-3xl border border-stone-200 bg-white p-4">'+
+      '<h2 class="text-lg font-bold flex items-center gap-2">'+icon("alert",18)+' دفعات فيها فائض</h2>'+
+      '<p class="text-xs text-stone-500 mt-1">دفعات اتسجّلت لكن جزء منها (أو كلها) ما اترحّلش على أي شهر. راجعها: امسحها وسجّلها من تاني عشان تترحّل صح.</p>'+
+    '</div>';
+  if(!list.length) return head+'<p class="text-center text-stone-400 py-12 text-sm">مفيش دفعات فيها فائض. 👌</p>'+metaFooter();
+  const fullyStuck=list.filter(x=>x.full);
+  const cards=list.map(x=>{
+    const u=x.u,o=x.o,p=x.p;
+    return '<div class="rounded-2xl border '+(x.full?"border-red-300":"border-amber-200")+' bg-white p-3.5">'+
+      '<div class="flex items-center justify-between gap-2 mb-1">'+
+        '<span class="font-mono text-[11px] text-stone-500">'+esc(u.code)+'</span>'+
+        '<span class="text-[11px] text-stone-500 truncate">'+esc(o.name)+'</span></div>'+
+      '<div class="text-sm font-semibold mb-2">'+esc([u.project,(norm(u.block)+norm(u.bldg)),u.apt].filter(Boolean).join(" "))+'</div>'+
+      '<div class="grid grid-cols-3 gap-2 text-[11px] mb-2.5">'+
+        '<div class="rounded-xl border border-stone-200 bg-stone-50 p-2"><div class="text-stone-500">الدفعة</div><div class="font-bold text-stone-800">'+fmt(p.amount)+'</div><div class="text-[10px] text-stone-400" dir="ltr">'+fmtDate(p.date)+'</div></div>'+
+        '<div class="rounded-xl border border-emerald-200 bg-emerald-50 p-2"><div class="text-emerald-700">اترحّل</div><div class="font-bold text-emerald-800">'+fmt(x.allocated)+'</div><div class="text-[10px] text-emerald-600">'+((p.allocated||[]).length)+' شهر</div></div>'+
+        '<div class="rounded-xl border border-red-200 bg-red-50 p-2"><div class="text-red-700">فائض</div><div class="font-bold text-red-800">'+fmt(x.left)+'</div>'+(x.full?'<div class="text-[10px] text-red-600">ملوش أثر</div>':"")+'</div>'+
+      '</div>'+
+      ((p.allocated||[]).length?'<div class="text-[10px] text-stone-500 mb-2">اترحّل على: '+p.allocated.map(a=>monLabel(a.idx)).join("، ")+'</div>':"")+
+      '<div class="flex gap-2">'+
+        '<button data-act="openUnit" data-code="'+esc(u.code)+'" data-from="stuck" class="flex-1 rounded-xl border border-stone-300 bg-white py-2 text-[12px] font-medium text-stone-600">افتح الوحدة</button>'+
+        '<button data-act="delPay" data-code="'+esc(u.code)+'" data-id="'+esc(p.id)+'" class="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl bg-red-600 text-white py-2 text-[12px] font-bold">'+icon("trash",13)+' امسح الدفعة</button>'+
+      '</div></div>';
+  }).join("");
+  return head+
+    '<div class="rounded-2xl border border-red-200 bg-red-50 p-3 my-3">'+
+      '<div class="text-[12px] font-bold text-red-900 mb-1">'+list.length+' دفعة فيها فائض'+(fullyStuck.length?(' — منهم <b>'+fullyStuck.length+'</b> ملهاش أي أثر'):"")+'</div>'+
+      '<div class="text-[11px] text-red-700 mb-2">إجمالي الفائض: <b>'+fmt(list.reduce((s,x)=>s+x.left,0))+' ج.م</b></div>'+
+      (fullyStuck.length?'<button data-act="stuckDelAll" class="w-full rounded-xl bg-red-600 text-white py-2 text-[12px] font-bold">امسح الـ'+fullyStuck.length+' دفعة اللي ملهاش أثر</button>':"")+
+    '</div>'+
+    '<div class="space-y-2">'+cards+'</div>'+metaFooter();
 }
 function viewReview(){
   const list=anchorReviews();
@@ -2381,6 +2439,7 @@ function screenTitle(){
     case "owners": return "كل الملاك";
     case "notes": return "ملاحظات ومراجعات";
     case "cloud": return "التخزين السحابي";
+    case "stuck": return "دفعات فيها فائض";
     case "review": return "مراجعة";
     case "comp": return "تقييم إيجارات الملاك";
     case "tags": return "وسوم التسويات";
@@ -2403,6 +2462,7 @@ function render(){
   else if(state.view==="tags"){ html=viewTags(); }
   else if(state.view==="notes"){ html=viewNotes(); }
   else if(state.view==="cloud"){ html=viewCloudSB(); }
+  else if(state.view==="stuck"){ html=viewStuck(); }
   else if(state.view==="review"){ html=viewReview(); }
   else if(state.view==="comp"){ html=viewCompReport(); }
   else { html=viewMain(); }
@@ -2653,6 +2713,12 @@ function handleClick(e){
       else { state.ghMsg=r.msg||"مفيش بيانات."; state.ghOk=!!r.ok; } render(); }); }
   else if(act==="ghPush"){ state.ghMsg="بيحفظ…"; state.ghOk=true; state.ghBusy=true; render();
     GH.push().then(function(r){ state.ghBusy=false; state.ghMsg=r.msg||(r.ok?"اتحفظ ✓":"تعذّر الحفظ"); state.ghOk=!!r.ok; render(); }); }
+  else if(act==="openStuck"){ syncMainFromDOM(); state.view="stuck"; window.scrollTo(0,0); render(); }
+  else if(act==="stuckDelAll"){ const list=stuckPayments().filter(x=>x.full);
+    if(!list.length) return;
+    if(!window.confirm("هتمسح "+list.length+" دفعة ملهاش أي أثر على الشهور. الدفعات دي مش هتتحذف من الشهور لأنها أصلاً ما اترحّلتش. تمام؟")) return;
+    let n=0; list.forEach(x=>{ removePayment(x.u, x.p.id); n++; });
+    computeAll(); markChange(n); save(); state.flash="اتمسحت "+n+" دفعة ملهاش أثر ✓"; render(); }
   else if(act==="openReview"){ syncMainFromDOM(); state.view="review"; window.scrollTo(0,0); render(); }
   else if(act==="revFixSettled"){ const f=findUnit(t.dataset.code); if(!f)return; const u=f.u;
     if(!u.settled)return;
