@@ -646,19 +646,21 @@ const AUTO_KEY=APP_ID+":auto", BACKUP_DAYS=7, BACKUP_CHANGES=20;
 function load(){try{const raw=localStorage.getItem(STORAGE_KEY);if(raw){const p=JSON.parse(raw);
   state.owners=p.owners||[];state.meta=p.meta||null;state.tagModes=p.tagModes||{};state.backup=p.backup||{lastAt:null,changes:0};
   if(p.report){ const r=p.report;
-    state.report={from:r.from||null,to:r.to||null,preset:r.preset||"until",status:r.status||"all",collect:!!r.collect,
-      source:r.source||"CIB OSOOL",sourceOther:r.sourceOther||"",payDate:r.payDate||todayYmd(),
-      ownerMonths:r.ownerMonths||{},rows:r.rows||{},benKey:r.benKey||null,
-      expanded:new Set(r.expanded||[]),bankOpen:new Set(r.bankOpen||[])};
+    state.report={from:r.from||null,to:r.to||null,preset:r.preset||"until",status:r.status||"all",
+      collect:false,                       // الأداة تفتح دايمًا في وضع العرض
+      source:r.source||"CIB OSOOL",sourceOther:r.sourceOther||"",payDate:todayYmd(),
+      ownerMonths:r.ownerMonths||{},rows:{},benKey:null,
+      expanded:new Set(),bankOpen:new Set()};
     if(r.compounds) state.compounds=new Set(r.compounds);
     if(r.banks) state.banks=new Set(r.banks);
   }
 }}catch(e){} if(!state.backup)state.backup={lastAt:null,changes:0}; ensureTagModes(); }
 function reportForSave(){ const r=state.report; if(!r)return null;
-  return { from:r.from, to:r.to, preset:r.preset, status:r.status, collect:r.collect,
-           source:r.source, sourceOther:r.sourceOther, payDate:r.payDate,
-           ownerMonths:r.ownerMonths||{}, rows:r.rows||{}, benKey:r.benKey||null,
-           expanded:Array.from(r.expanded||[]), bankOpen:Array.from(r.bankOpen||[]),
+  // ملحوظة: وضع السداد (collect) والتحديدات (rows) والبحث والتجميع = حالة مؤقتة
+  // متتحفظش أبدًا عشان الأداة ماتفتحش على وضع سداد أو تحديدات قديمة.
+  return { from:r.from, to:r.to, preset:r.preset, status:r.status,
+           source:r.source, sourceOther:r.sourceOther,
+           ownerMonths:r.ownerMonths||{},
            compounds:state.compounds?Array.from(state.compounds):null,
            banks:state.banks?Array.from(state.banks):null }; }
 function save(){
@@ -1300,6 +1302,14 @@ function ownerCard(g,m){
 
   // ===== الكارت مضموم افتراضيًا: الأساسيات بس + سهم للفتح =====
   const nUnits=new Set(g.rows.map(x=>x.u.code)).size;
+  // آخر سداد على وحدات المالك دي + عدد الشهور المتبقية
+  let lastPay=null, remMonths=0;
+  { const seen={};
+    g.rows.forEach(x=>{ const u=x.u; if(seen[u.code])return; seen[u.code]=1;
+      (u.payments||[]).forEach(p=>{ if(!lastPay || ymdToUTC(p.date)>ymdToUTC(lastPay.date)) lastPay=p; });
+      { const tY=todayYmd(); unitDuePayments(u).forEach(p=>{ if(!p.estimated && daysDiff(p.dueDate,tY)<0) remMonths+=(p.months||1); }); }
+    });
+  }
   const dd=daysDiff(g.earliest,todayYmd());
   const dcol=dd<0?"text-red-600":(dd<=SOON_WINDOW?"text-amber-600":"text-stone-500");
   const dlabel=dd<0?("متأخر "+(-dd)+"ي"):(dd===0?"النهارده":(dd<=SOON_WINDOW?("خلال "+dd+"ي"):fmtDate(g.earliest)));
@@ -1316,6 +1326,7 @@ function ownerCard(g,m){
       '<div class="flex items-center justify-between gap-2 mt-1">'+
         '<span class="text-[11px] inline-flex items-center gap-1.5 truncate min-w-0">'+
           '<span class="'+dcol+' font-semibold shrink-0">'+dlabel+'</span>'+
+          (lastPay?'<span class="shrink-0 inline-flex items-center gap-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 text-[9px] font-bold" title="آخر سداد '+esc(fmtDate(lastPay.date))+' بمبلغ '+esc(fmt(lastPay.amount))+'">'+icon("check",9)+'اتسدد '+fmtDate(lastPay.date)+'</span>':"")+
           '<span class="text-stone-300 shrink-0">·</span>'+
           '<span class="text-stone-500 shrink-0">'+nUnits+' وحدة</span>'+
           (bank?'<span class="text-stone-300 shrink-0">·</span><span class="text-stone-400 truncate">'+esc(bank)+'</span>':"")+
@@ -1325,13 +1336,18 @@ function ownerCard(g,m){
     '</button>';
 
   // التفاصيل تظهر بس لما الكارت مفتوح
-  const bodyHtml = isE ? (
+  const openForPay = isE || m.collect;   // في وضع السداد لازم الصفوف تبان عشان تحدّدها
+  const bodyHtml = openForPay ? (
       '<div class="px-3.5 pb-2 flex items-center gap-1.5 border-b border-stone-100">'+
         '<button data-act="openOwner" data-key="'+esc(o.key)+'" data-from="main" class="inline-flex items-center gap-1 text-[11px] font-medium text-stone-600 border border-stone-200 rounded-lg px-2 py-1">'+icon("user",12)+' صفحة المالك</button>'+
         '<button data-act="printOwner" data-key="'+esc(o.key)+'" class="inline-flex items-center text-[11px] font-medium text-stone-600 border border-stone-200 rounded-lg px-2 py-1" title="طباعة ورقة المالك">'+icon("printer",12)+'</button>'+
         '<button data-act="bankToggle" data-key="'+esc(o.key)+'" class="inline-flex items-center gap-1 text-[11px] font-medium '+(m.bankOpen&&m.bankOpen.has(o.key)?"text-stone-600 border-stone-200":"text-emerald-700 border-emerald-200 bg-emerald-50")+' border rounded-lg px-2 py-1">'+icon("landmark",12)+' بيانات التحويل</button>'+
       '</div>'+
       ((m.bankOpen&&m.bankOpen.has(o.key))?'<div class="px-3 py-2.5 bg-stone-50/70 border-b border-stone-100 space-y-1.5">'+ownerBankFields(o)+'</div>':"")+
+      ((remMonths||lastPay)?'<div class="px-3.5 py-1.5 bg-stone-50 border-b border-stone-100 text-[11px] text-stone-600">'+
+        (lastPay?'<span class="text-emerald-700 font-semibold">✓ اتسدد '+fmt(lastPay.amount)+' يوم '+fmtDate(lastPay.date)+'</span>':"")+
+        (remMonths?(lastPay?' — ':'')+'المعروض تحت <b>استحقاق تاني</b> ('+remMonths+' شهر متأخر لسه)':(lastPay?' — مفيش متأخر باقي':""))+
+      '</div>':"")+
       (stepperRow?'<div class="px-3.5">'+stepperRow+'</div>':"")+
       '<div class="divide-y divide-stone-100">'+rows+'</div>'
     ) : "";
@@ -2588,7 +2604,17 @@ function handleClick(e){
       if(lastP&&lastP.blocked) blockedList.push(f.u.code+" ("+fmt(lastP.leftover)+")");
       n++; total+=r.amount; });
     computeAll(); markChange(n); save();
-    state.flash = n? ("تم تسجيل "+n+" دفعة بإجمالي "+fmt(total)+" ج.م."+(blockedList.length?(" ⚠ فيه "+blockedList.length+" وحدة وقف السداد عندها لشهر ناقص في الجدول: "+blockedList.join("، ")):"")) : "ماحددتش أي دفعة.";
+    // كام وحدة لسه عليها متأخرات بعد السداد ده؟
+    let stillDue=0, stillMonths=0;
+    { const tY=todayYmd();
+      state.owners.forEach(o=>o.units.forEach(u=>{ if(!unitVisible(u)||unitExcluded(u))return;
+        // المتأخر = استحقاق عدّى تاريخه ولسه مش مسدّد (مش كل شهور الجدول)
+        let n=0;
+        unitDuePayments(u).forEach(p=>{ if(!p.estimated && daysDiff(p.dueDate,tY)<0) n+=(p.months||1); });
+        if(n){ stillDue++; stillMonths+=n; } })); }
+    state.flash = n? ("تم تسجيل "+n+" دفعة بإجمالي "+fmt(total)+" ج.م."
+      +(stillDue?(" — لسه "+stillDue+" وحدة عليها "+stillMonths+" شهر متأخر."):" — مفيش متأخرات باقية ✓")
+      +(blockedList.length?(" ⚠ فيه "+blockedList.length+" وحدة وقف السداد عندها لشهر ناقص في الجدول: "+blockedList.join("، ")):"")) : "ماحددتش أي دفعة.";
     m.collect=false; m.rows={}; window.scrollTo(0,0); render();
   }
   else if(act==="delPay"){ const f=findUnit(t.dataset.code); if(f){ removePayment(f.u, t.dataset.id); computeAll(); markChange(1); save(); render(); } }
