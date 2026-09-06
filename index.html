@@ -262,6 +262,30 @@ function blindBannerHTML(){
     '<div class="text-[10px] text-orange-700 mt-1.5">سجّل قيمة الإيجار من شاشة الوحدة أو من الإكسل عشان تدخل في المستحقات.</div></div>';
 }
 // دفعات فيها فائض ما اترحّلش على أي شهر (نتيجة عطل الأصفار القديم)
+// شهور فاضية في نص الجدول (بتوقف الترحيل)
+function gridGaps(u){
+  const all=Object.keys(u.grid).map(Number).sort((a,b)=>a-b);
+  const real=all.filter(i=>u.grid[i].due>0);
+  if(real.length<2) return [];
+  const first=real[0], last=real[real.length-1];
+  return all.filter(i=>i>first && i<last && !(u.grid[i].due>0));
+}
+// تحذير: وحدات جدولها فيه شهور فاضية في النص (أي سداد عليها هيقف ويبقى فائض)
+function gapWarnHTML(){
+  const out=[];
+  state.owners.forEach(o=>o.units.forEach(u=>{ if(!unitVisible(u)||unitExcluded(u))return;
+    const gaps=gridGaps(u); if(gaps.length) out.push({o,u,gaps}); }));
+  if(!out.length) return "";
+  return '<div class="rounded-xl border border-red-300 bg-red-50 px-3 py-2.5 mb-2.5">'+
+    '<div class="text-[11px] font-bold text-red-900 mb-1">'+icon("alert",13)+' '+out.length+' وحدة جدولها فيه شهور فاضية في النص — السداد عليها هيقف ويبقى فائض:</div>'+
+    '<div class="space-y-0.5">'+out.slice(0,6).map(x=>
+      '<button data-act="openUnit" data-code="'+esc(x.u.code)+'" data-from="main" class="w-full text-right text-[11px] text-red-800">'+
+      '<span class="font-mono">'+esc(x.u.code)+'</span> — '+esc(x.o.name)+
+      ' <span class="text-red-600">('+x.gaps.slice(0,4).map(i=>monLabel(i)).join("، ")+(x.gaps.length>4?'…':'')+')</span></button>').join("")+'</div>'+
+    (out.length>6?'<div class="text-[10px] text-red-700 mt-1">و'+(out.length-6)+' وحدة كمان…</div>':'')+
+    '<div class="text-[10px] text-red-700 mt-1.5">اكتب قيمة الإيجار للشهور دي (أو امسح صفوفها) عشان السداد يترحّل صح.</div>'+
+    '<button data-act="fixGaps" class="w-full mt-2 rounded-xl bg-red-600 text-white py-2 text-[11px] font-bold">'+icon("refresh",12)+' املا الشهور الفاضية بآخر إيجار معروف</button></div>';
+}
 function stuckPayments(){
   const out=[];
   state.owners.forEach(o=>o.units.forEach(u=>{
@@ -549,6 +573,7 @@ function unitMonthsBreakdown(u,n){
   if(lines.length<N && !blocked){
     const rentGuess=lastReal!=null?u.grid[lastReal].due:0;
     // نبدأ من بعد آخر شهر مأخوذ، أو من بعد آخر شهر حقيقي في الجدول
+    // نبدأ من بعد آخر شهر مأخوذ، وإلا من بعد آخر قسط حقيقي (مش آخر صف في الجدول)
     let lastIdx=lines.length?lines[lines.length-1].idx:lastReal;
     let guard=0;
     while(lines.length<N && rentGuess>0 && lastIdx!=null && guard++<120){
@@ -637,9 +662,18 @@ function recordPayment(u,amount,dateYmd,source,note){
   if(remaining>0.0001 && !hitGap){
     const dueMonths=sorted.filter(i=>u.grid[i].due>0);
     const rentGuess=dueMonths.length?u.grid[dueMonths[dueMonths.length-1]].due:0;
-    let lastIdx=sorted.length?sorted[sorted.length-1]:null, guard=0;
+    // ⚠ لازم نبدأ من بعد آخر قسط حقيقي — مش من بعد آخر صف في الجدول.
+    // الصفوف الفاضية اللي في الآخر لازم تتملّى الأول، وإلا هتفضل فجوة في النص.
+    let lastIdx=dueMonths.length?dueMonths[dueMonths.length-1]:(sorted.length?sorted[sorted.length-1]:null);
+    let guard=0;
     while(remaining>0.0001 && rentGuess>0 && lastIdx!=null && guard++<120){
       lastIdx+=1; const pay=Math.min(rentGuess,remaining);
+      const cur=u.grid[lastIdx];
+      if(cur && cur.due>0){                       // صف موجود بقسط حقيقي: كمّل عليه
+        const need=cur.due-(cur.paid||0);
+        if(need>0.0001){ const p2=Math.min(need,remaining); cur.paid=(cur.paid||0)+p2; remaining-=p2; allocated.push({idx:lastIdx,amt:p2}); }
+        continue;
+      }
       u.grid[lastIdx]={due:rentGuess,paid:pay,created:true};
       remaining-=pay; allocated.push({idx:lastIdx,amt:pay,created:true});
     }
@@ -1184,7 +1218,7 @@ function viewMain(){
     '<input id="mainSearch" value="'+esc(m.q)+'" placeholder="ابحث بالمالك، المستفيد، رقم الوحدة، التليفون، أو الحساب" class="w-full rounded-xl border border-stone-200 bg-white py-2.5 pr-9 pl-8 text-[13px] outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"/>'+
     (m.q?'<button data-act="mainSearchClear" class="absolute top-1/2 -translate-y-1/2 left-2.5 text-stone-400">'+icon("x",14)+'</button>':"")+'</div>';
   const filt=filterBar()+bankBar();
-  if(!data.length) return toolbar+search+filt+range+head+blindBannerHTML()+searchFallbackHTML(m,data)+
+  if(!data.length) return toolbar+search+filt+range+head+gapWarnHTML()+blindBannerHTML()+searchFallbackHTML(m,data)+
     '<p class="text-center text-stone-400 py-12 text-sm">مفيش مستحقات '+(m.q?'مطابقة للبحث':'في المدة دي ضمن الفلتر')+'. 👌</p>'+metaFooter();
   // وحدات فيها شهر قسطه صفر (قيمة ناقصة) — لازم تنبيه صريح
   const gapUnits=[];
@@ -1192,6 +1226,7 @@ function viewMain(){
       const bb=unitMonthsBreakdown(u,ownerMonthsFor(g.o));
       if(bb.blocked) gapUnits.push({u,o:g.o,months:bb.gapMonths.map(i=>monLabel(i)),shortBy:bb.shortBy}); }); });
   // بانر: دفعات فيها فائض ما اترحّلش
+  const gapWarn=gapWarnHTML();
   const stuckList=stuckPayments();
   const stuckBanner=stuckList.length?'<div class="rounded-xl border border-red-300 bg-red-50 px-3 py-2.5 mb-2.5">'+
     '<div class="flex items-center justify-between gap-2">'+
@@ -1295,7 +1330,7 @@ function viewMain(){
     '<button data-act="expandAll" class="inline-flex items-center gap-1 text-[11px] font-medium text-stone-500 border border-stone-200 bg-white rounded-lg px-2 py-1">'+
       icon(allOpen?"x":"chevronDown",12)+' '+(allOpen?"اضغط الكل":"افتح الكل")+'</button></div>':"";
   const groups=data.map(g=>ownerCard(g,m)).join("");
-  return toolbar+search+filt+range+head+stuckBanner+blindBanner+gapBanner+estBanner+benBanner+'<div class="lg:flex lg:gap-4 lg:items-start">'+
+  return toolbar+search+filt+range+head+gapWarn+stuckBanner+blindBanner+gapBanner+estBanner+benBanner+'<div class="lg:flex lg:gap-4 lg:items-start">'+
     '<div class="flex-1 min-w-0">'+expandBar+'<div class="space-y-2.5">'+groups+'</div>'+outOfRange+'</div>'+
     sideHTML+
   '</div>'+(m.collect?'<div class="h-28"></div>'+collectionBar(m):metaFooter());
@@ -2679,7 +2714,7 @@ function handleClick(e){
         if(n){ stillDue++; stillMonths+=n; } })); }
     state.flash = n? ("تم تسجيل "+n+" دفعة بإجمالي "+fmt(total)+" ج.م."
       +(stillDue?(" — لسه "+stillDue+" وحدة عليها "+stillMonths+" شهر متأخر."):" — مفيش متأخرات باقية ✓")
-      +(blockedList.length?(" ⚠ فيه "+blockedList.length+" وحدة وقف السداد عندها لشهر ناقص في الجدول: "+blockedList.join("، ")):"")) : "ماحددتش أي دفعة.";
+      +(blockedList.length?(" ⚠️ "+blockedList.length+" وحدة المبلغ فيها بقى فائض ولا اترحّل — الجدول فيه شهور فاضية في النص: "+blockedList.join("، ")+". صحّح الجدول وسجّل الدفعة تاني."):"")) : "ماحددتش أي دفعة.";
     m.collect=false; m.rows={}; window.scrollTo(0,0); render();
   }
   else if(act==="delPay"){ const f=findUnit(t.dataset.code); if(f){ removePayment(f.u, t.dataset.id); computeAll(); markChange(1); save(); render(); } }
@@ -2713,6 +2748,26 @@ function handleClick(e){
       else { state.ghMsg=r.msg||"مفيش بيانات."; state.ghOk=!!r.ok; } render(); }); }
   else if(act==="ghPush"){ state.ghMsg="بيحفظ…"; state.ghOk=true; state.ghBusy=true; render();
     GH.push().then(function(r){ state.ghBusy=false; state.ghMsg=r.msg||(r.ok?"اتحفظ ✓":"تعذّر الحفظ"); state.ghOk=!!r.ok; render(); }); }
+  else if(act==="fixGaps"){
+    const targets=[];
+    state.owners.forEach(o=>o.units.forEach(u=>{ if(!unitVisible(u)||unitExcluded(u))return;
+      const gaps=gridGaps(u); if(gaps.length) targets.push({o,u,gaps}); }));
+    if(!targets.length){ state.flash="مفيش وحدات فيها فجوات."; render(); return; }
+    const nMonths=targets.reduce((s,x)=>s+x.gaps.length,0);
+    if(!window.confirm("هيتكتب قيمة الإيجار في "+nMonths+" شهر فاضي داخل "+targets.length+" وحدة (بقيمة آخر قسط معروف قبلها). ده بيصلّح الفجوات اللي بتوقف السداد. تمام؟")) return;
+    let filled=0;
+    targets.forEach(x=>{ const u=x.u;
+      const all=Object.keys(u.grid).map(Number).sort((a,b)=>a-b);
+      x.gaps.forEach(i=>{
+        // آخر قسط حقيقي قبل الشهر ده
+        const prev=all.filter(k=>k<i && u.grid[k].due>0).pop();
+        const rent=prev!=null?u.grid[prev].due:0;
+        if(rent>0){ u.grid[i]={due:rent,paid:u.grid[i].paid||0,created:true}; filled++; }
+      });
+      u.edited=true;
+    });
+    computeAll(); markChange(filled); save();
+    state.flash="اتكتب الإيجار في "+filled+" شهر — الفجوات اتصلّحت ✓"; render(); }
   else if(act==="openStuck"){ syncMainFromDOM(); state.view="stuck"; window.scrollTo(0,0); render(); }
   else if(act==="stuckDelAll"){ const list=stuckPayments().filter(x=>x.full);
     if(!list.length) return;
