@@ -1348,7 +1348,7 @@ function ownerCard(g,m){
     const defN=Math.max(1,...punits.map(u=>u.payEvery||1));
     const N=m.ownerMonths[o.key]!=null?m.ownerMonths[o.key]:defN;
     let sub=0;
-    rows=punits.map(u=>{const r=m.rows[u.code];const amt=(r&&r.amount!=null)?r.amount:dueAmount(u,N);const checked=!!(r&&r.checked);sub+=amt;return collectRow(u,o.key,amt,checked);}).join("");
+    rows=punits.map(u=>{const r=m.rows[u.code];const amt=(r&&r.amount!=null)?r.amount:dueAmount(u,N);const checked=!!(r&&r.checked);sub+=amt;return collectRow(u,o.key,amt,checked,N);}).join("");
     subtotalHtml='<span class="own-sub text-base font-extrabold tnum shrink-0" data-key="'+esc(o.key)+'">'+fmt(sub)+'</span>';
     stepperRow='<div class="flex items-center justify-between gap-2 mt-2 pt-2 border-t border-dashed border-stone-200">'+
       '<span class="text-[11px] text-stone-500">شهور السداد <span class="text-stone-300">(المفروض '+defN+')</span></span>'+
@@ -1424,13 +1424,17 @@ function unitInfoBtn(u){
   const beds=norm(u.beds)?' · '+esc(u.beds)+' bedroom':"";
   return '<button data-act="openUnit" data-code="'+esc(u.code)+'" data-from="main" class="text-[11px] font-semibold text-stone-700 inline-flex items-center gap-1 text-right min-w-0 max-w-full"><span class="truncate" dir="ltr" style="display:inline-block">'+esc(info)+beds+'</span>'+(norm(u.tag)?tagBadge(u):"")+(u.edited?editedBadge(u):"")+icon("arrowRight",10,"opacity-30 shrink-0")+'</button>';
 }
-function collectRow(u,ownerKey,amt,checked){
+function collectRow(u,ownerKey,amt,checked,months){
+  const bk=months?unitMonthsBreakdown(u,months):null;
+  const per=(bk&&bk.lines.length)?periodBox(bk.lines[0].from,bk.lines[bk.lines.length-1].to,bk.count,{tight:true}):"";
   return '<div class="pay-row px-3.5 py-2.5 '+(checked?"bg-emerald-50/60":"")+'" data-code="'+esc(u.code)+'" data-key="'+esc(u.code)+'" data-owner="'+esc(ownerKey)+'">'+
     '<div class="flex items-center gap-2.5">'+
       '<input type="checkbox" class="pay-check w-5 h-5 accent-emerald-600 shrink-0"'+(checked?" checked":"")+'/>'+
       '<div class="flex-1 min-w-0">'+unitInfoBtn(u)+'</div>'+
       '<input class="pay-amt w-[88px] rounded-lg border border-stone-300 px-2 py-1.5 text-sm tnum text-left shrink-0" dir="ltr" inputmode="numeric" value="'+Math.round(amt)+'"/>'+
-    '</div></div>';
+    '</div>'+
+    (per?'<div class="mt-1.5 pr-7">'+per+'</div>':"")+
+    '</div>';
 }
 function payRow(x,m){
   const p=x.p,u=x.u;
@@ -1438,10 +1442,62 @@ function payRow(x,m){
   const dcol=dd<0?"text-red-600":(dd<=SOON_WINDOW?"text-amber-600":"text-stone-500");
   const dlabel=dd<0?("متأخر "+(-dd)+"ي"):(dd===0?"النهارده":(dd<=SOON_WINDOW?("خلال "+dd+"ي"):fmtDate(p.dueDate)));
   const etag=p.beyond?' <span class="text-[9px] text-red-700 border border-red-200 bg-red-50 rounded px-1">بعد نهاية العقد</span>':(p.estimated?' <span class="text-[9px] text-amber-700 border border-amber-200 bg-amber-50 rounded px-1">تقديري</span>':'');
-  const meta='<span class="'+dcol+' font-medium">'+dlabel+'</span>'+etag+' <span class="text-stone-400" dir="ltr" style="display:inline-block">· '+p.months+' month · '+fmtDate(p.from)+' → '+fmtDate(p.to)+'</span>';
-  return '<div class="px-3.5 py-2.5 flex items-center justify-between gap-2">'+
-    '<div class="min-w-0">'+unitInfoBtn(u)+'<div class="text-[10px] mt-0.5">'+meta+'</div></div>'+
-    '<span class="text-sm font-bold tnum shrink-0">'+fmt(p.amount)+'</span></div>';
+  return '<div class="px-3.5 py-2.5">'+
+    '<div class="flex items-center justify-between gap-2">'+
+      '<div class="min-w-0">'+unitInfoBtn(u)+'</div>'+
+      '<span class="text-[10px] shrink-0 '+dcol+' font-bold">'+dlabel+'</span>'+
+    '</div>'+
+    (etag?'<div class="mt-1">'+etag+'</div>':"")+
+    '<div class="mt-1.5">'+periodBox(p.from,p.to,p.months,{tight:true})+'</div>'+
+    '<div class="flex items-center justify-between gap-2 mt-2">'+
+      '<span class="text-[11px] text-stone-500">المستحق</span>'+
+      '<span class="inline-flex items-center gap-2">'+
+        '<span class="text-base font-extrabold tnum">'+fmt(p.amount)+'</span>'+
+        '<button data-act="quickPay" data-code="'+esc(u.code)+'" data-amt="'+Math.round(p.amount)+'" data-months="'+(p.months||1)+'" class="inline-flex items-center gap-1 rounded-xl bg-stone-900 text-white px-3 py-1.5 text-[11px] font-bold active:scale-[0.97]">'+icon("banknote",12)+' سداد</button>'+
+      '</span>'+
+    '</div></div>';
+}
+// ===== نافذة السداد المباشر =====
+function quickPayModal(){
+  const q=state.quickPay; if(!q) return "";
+  const f=findUnit(q.code); if(!f) return "";
+  const u=f.u, o=f.o;
+  const b=unitMonthsBreakdown(u,q.months);
+  const info=[u.project,(norm(u.block)+norm(u.bldg)),u.apt].filter(Boolean).join(" ");
+  const per=b.lines.length?(fmtDate(b.lines[0].from)+" → "+fmtDate(b.lines[b.lines.length-1].to)):"—";
+  const srcBtn=(v)=>'<button data-act="qpSrc" data-s="'+esc(v)+'" class="flex-1 rounded-lg border px-1 py-1.5 text-[11px] font-semibold '+(q.source===v?"bg-stone-900 text-white border-stone-900":"bg-white text-stone-600 border-stone-200")+'">'+esc(v)+'</button>';
+  return '<div class="fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center p-4" data-qp-backdrop="1">'+
+    '<div class="w-full max-w-sm rounded-3xl bg-white shadow-2xl overflow-hidden" data-qp-panel="1">'+
+      '<div class="px-4 py-3 border-b border-stone-100 flex items-start justify-between gap-2">'+
+        '<div class="min-w-0"><div class="font-bold text-sm truncate">'+esc(info)+'</div>'+
+          '<div class="text-[10px] text-stone-400 truncate">'+esc(o.name)+' · <span class="font-mono">'+esc(u.code)+'</span></div></div>'+
+        '<button data-act="qpClose" class="w-8 h-8 shrink-0 rounded-full bg-stone-100 text-stone-500 text-lg leading-none">×</button>'+
+      '</div>'+
+      (b.lines.length?'<div class="px-4 pt-3">'+periodBox(b.lines[0].from,b.lines[b.lines.length-1].to,b.count,{dark:true,label:"المبلغ ده مقابل مدة"})+'</div>':"")+
+      '<div class="p-4 space-y-3">'+
+        '<div><label class="block text-[11px] text-stone-500 mb-1">المبلغ</label>'+
+          '<input id="qp-amt" value="'+Math.round(q.amount)+'" inputmode="numeric" dir="ltr" class="w-full rounded-xl border-2 border-stone-300 px-3 py-2.5 text-lg font-bold tnum text-left"/></div>'+
+        '<div><label class="block text-[11px] text-stone-500 mb-1">عدد الشهور</label>'+
+          '<div class="flex items-center gap-2">'+
+            '<button data-act="qpM" data-d="-1" class="w-10 h-10 rounded-xl border border-stone-300 bg-white text-lg font-bold">−</button>'+
+            '<span class="flex-1 text-center text-lg font-bold">'+monthsWord(q.months)+'</span>'+
+            '<button data-act="qpM" data-d="1" class="w-10 h-10 rounded-xl border border-stone-300 bg-white text-lg font-bold">+</button>'+
+          '</div>'+
+          (b.hasEstimated?'<p class="text-[10px] text-amber-600 mt-1">فيه شهور تقديرية</p>':"")+
+          (b.blocked?'<p class="text-[10px] text-red-600 mt-1">⚠ فيه شهر فاضي في الجدول — السداد هيقف عنده</p>':"")+
+        '</div>'+
+        '<div><label class="block text-[11px] text-stone-500 mb-1">تاريخ السداد</label>'+
+          '<input id="qp-date" type="date" value="'+ymdToInput(q.date)+'" dir="ltr" class="w-full rounded-xl border border-stone-300 px-2 py-2 text-[12px]"/></div>'+
+        '<div><label class="block text-[11px] text-stone-500 mb-1">المصدر</label>'+
+          '<div class="flex gap-1.5">'+srcBtn("CIB OSOOL")+srcBtn("Mr. Feras")+srcBtn("Other")+'</div>'+
+          (q.source==="Other"?'<input id="qp-other" value="'+esc(q.sourceOther||"")+'" placeholder="اكتب المصدر" class="w-full mt-1.5 rounded-xl border border-stone-300 px-2 py-2 text-[12px]"/>':"")+
+        '</div>'+
+      '</div>'+
+      '<div class="p-4 pt-0 flex gap-2">'+
+        '<button data-act="qpClose" class="flex-1 rounded-2xl border border-stone-300 bg-white py-3 text-sm font-semibold text-stone-600">إلغاء</button>'+
+        '<button data-act="qpConfirm" class="flex-1 rounded-2xl bg-emerald-600 text-white py-3 text-sm font-bold">تأكيد السداد</button>'+
+      '</div>'+
+    '</div></div>';
 }
 function collectionBar(m){
   const sc=(v)=>'<button data-act="bulkSrc" data-s="'+esc(v)+'" class="flex-1 rounded-lg border px-1 py-1.5 text-[11px] font-semibold '+(m.source===v?"bg-stone-900 text-white border-stone-900":"bg-white text-stone-600 border-stone-200")+'">'+esc(v)+'</button>';
@@ -1457,6 +1513,10 @@ function collectionBar(m){
       '<button data-act="bulkConfirm" class="flex-1 rounded-xl bg-emerald-600 text-white py-2.5 font-bold text-sm flex items-center justify-center gap-1.5">'+icon("check",16)+' تأكيد (<span id="bulkCount">0</span>) · <span id="bulkTotal" class="tnum">0</span> ج.م</button></div>'+
   '</div></div></div>';
 }
+function qpSync(){ const q=state.quickPay; if(!q)return;
+  const a=document.getElementById("qp-amt"); if(a) q.amount=parseFloat(String(a.value).replace(/[^\d.]/g,""))||0;
+  const d=document.getElementById("qp-date"); if(d&&d.value) q.date=inputToYmd(d.value);
+  const o=document.getElementById("qp-other"); if(o) q.sourceOther=o.value; }
 function syncMainFromDOM(){
   const m=state.report; if(!m||!m.collect)return;
   const o=document.getElementById("bulkOther"); if(o)m.sourceOther=o.value;
@@ -1528,22 +1588,37 @@ function viewOwnerDetail(){
   const bankBlock='<div class="rounded-3xl border border-stone-200 bg-white p-4 mt-3"><div class="flex items-center justify-between mb-2"><h3 class="text-xs font-semibold text-stone-500 flex items-center gap-1.5">'+icon("landmark",14)+' بيانات التحويل</h3>'+
     '<button data-act="editOwner" class="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 border border-emerald-200 bg-emerald-50 rounded-lg px-2 py-1">'+icon("edit",12)+' تعديل</button></div>'+
     '<div class="space-y-2">'+ownerBankFields(o)+'</div>'+(o.edited?'<p class="text-[10px] text-amber-700 mt-2">✎ فيه تعديلات يدوية على بيانات المالك</p>':"")+'</div>';
+  const nMonths=ownerMonthsFor(o);
+  let ownerTotal=0;
   const unitCards=units.map(u=>{const c=u._c;const sc=statusChip(c);const rc=renewalChip(c);
-    return '<button data-act="openUnit" data-code="'+esc(u.code)+'" data-from="owner" class="w-full text-right rounded-2xl border border-stone-200 bg-white px-4 py-3 hover:border-stone-300 transition active:scale-[0.99]">'+
-      '<div class="flex items-center justify-between gap-2 mb-1.5"><span class="font-mono text-xs text-stone-500">'+esc(u.code)+'</span>'+
-        '<span class="inline-flex items-center gap-1 text-[11px] font-medium border rounded-full px-2 py-0.5 '+sc.cls+'">'+icon(sc.ic,11)+" "+esc(sc.t)+'</span></div>'+
-      '<div class="text-sm font-semibold text-right">'+esc([u.project,(norm(u.block)+norm(u.bldg)),u.apt].filter(Boolean).join(" "))+(norm(u.tag)?' '+tagBadge(u):"")+'</div>'+
-      '<div class="flex items-center gap-2 mt-1.5 text-[11px] text-stone-500">'+
-        '<span>يدفع كل '+u.payEvery+' شهر</span>'+(rc?'<span class="inline-flex items-center gap-1 border rounded-full px-1.5 py-0.5 '+rc.cls+'">'+icon(rc.ic,10)+" "+esc(rc.t)+'</span>':"")+
-        (c.alerts.length?'<span class="inline-flex items-center gap-1 text-amber-600">'+icon("alert",11)+c.alerts.length+'</span>':"")+
-      '</div></button>';
+    const bk=unitMonthsBreakdown(u,nMonths); const amt=Math.round(bk.total||0); ownerTotal+=amt;
+    return '<div class="rounded-2xl border border-stone-200 bg-white px-4 py-3">'+
+      '<button data-act="openUnit" data-code="'+esc(u.code)+'" data-from="owner" class="w-full text-right">'+
+        '<div class="flex items-center justify-between gap-2 mb-1.5"><span class="font-mono text-xs text-stone-500">'+esc(u.code)+'</span>'+
+          '<span class="inline-flex items-center gap-1 text-[11px] font-medium border rounded-full px-2 py-0.5 '+sc.cls+'">'+icon(sc.ic,11)+" "+esc(sc.t)+'</span></div>'+
+        '<div class="text-sm font-semibold text-right">'+esc([u.project,(norm(u.block)+norm(u.bldg)),u.apt].filter(Boolean).join(" "))+(norm(u.tag)?' '+tagBadge(u):"")+'</div>'+
+        '<div class="flex items-center gap-2 mt-1.5 text-[11px] text-stone-500">'+
+          '<span>يدفع كل '+u.payEvery+' شهر</span>'+(rc?'<span class="inline-flex items-center gap-1 border rounded-full px-1.5 py-0.5 '+rc.cls+'">'+icon(rc.ic,10)+" "+esc(rc.t)+'</span>':"")+
+          (c.alerts.length?'<span class="inline-flex items-center gap-1 text-amber-600">'+icon("alert",11)+c.alerts.length+'</span>':"")+
+        '</div>'+
+      '</button>'+
+      (amt>0?'<div class="mt-2.5 pt-2.5 border-t border-stone-100">'+
+        (bk.lines.length?periodBox(bk.lines[0].from,bk.lines[bk.lines.length-1].to,bk.count,{tight:true}):"")+
+      '</div><div class="flex items-center justify-between gap-2 mt-2">'+
+        '<span class="text-[11px] text-stone-500">المستحق</span>'+
+        '<span class="inline-flex items-center gap-2">'+
+          '<span class="text-sm font-bold tnum">'+fmt(amt)+'</span>'+
+          '<button data-act="quickPay" data-code="'+esc(u.code)+'" data-amt="'+amt+'" data-months="'+nMonths+'" class="inline-flex items-center gap-1 rounded-xl bg-stone-900 text-white px-3 py-1.5 text-[11px] font-bold">'+icon("banknote",12)+' سداد</button>'+
+        '</span></div>':"")+
+      '</div>';
   }).join("");
+  const payAllBtn=(units.length>1&&ownerTotal>0)?'<button data-act="qpAll" class="w-full mt-2 inline-flex items-center justify-center gap-2 rounded-2xl border-2 border-stone-900 bg-white py-2.5 text-[12px] font-bold text-stone-900">'+icon("banknote",14)+' سدّد كل وحدات المالك · '+fmt(ownerTotal)+'</button>':"";
   return '<button data-act="back" data-to="'+(state.ownerBack==="owners"?"owners":"main")+'" class="inline-flex items-center gap-1.5 text-sm font-medium text-stone-600 mb-2">'+icon("arrowRight",16)+' رجوع</button>'+
     '<div class="rounded-3xl border border-stone-200 bg-white p-4"><h2 class="text-lg font-bold">'+esc(o.name)+'</h2><p class="text-xs text-stone-500 mt-0.5">'+units.length+' وحدة</p></div>'+
     bankBlock+
     ownerDocSection(o)+
     '<h3 class="text-sm font-semibold text-stone-600 flex items-center gap-1.5 mt-4 mb-2 px-1">'+icon("home",15)+' الوحدات</h3>'+
-    '<div class="space-y-2">'+unitCards+'</div>'+metaFooter();
+    '<div class="space-y-2">'+unitCards+'</div>'+payAllBtn+metaFooter();
 }
 
 // شاشة الدخول الأولى — أول حاجة تظهر لما الأداة تفتح وانت مش مسجّل دخول
@@ -2173,6 +2248,24 @@ function ownerDocsHTML(owners){
 
 function printOwnerDocs(owners){ owners=(owners||[]).filter(Boolean); if(!owners.length){alert("مفيش مالك عليه مستحقات للطباعة.");return;} const w=window.open("","_blank"); if(!w){alert("اسمح بالنوافذ المنبثقة عشان الطباعة تشتغل.");return;} w.document.write(ownerDocsHTML(owners)); w.document.close(); w.focus(); setTimeout(function(){try{w.print();}catch(e){}},500); }
 // on-screen transfer document inside the owner page
+// صندوق المدة البارز — يُستخدم في كل مكان (الكارت، صفحة المالك، النافذة)
+function monthsWord(n){ n=+n||0; return n===1?"شهر واحد":(n===2?"شهرين":(n<=10?(n+" شهور"):(n+" شهر"))); }
+function periodBox(from,to,months,opts){
+  opts=opts||{};
+  const dark=!!opts.dark, tight=!!opts.tight;
+  const base=dark?'bg-stone-900 text-white border-stone-900':'bg-stone-100 border-stone-200';
+  return '<div class="rounded-xl border '+base+' px-2.5 '+(tight?'py-1.5':'py-2')+'">'+
+    (opts.label?'<div class="text-[10px] '+(dark?'opacity-70':'text-stone-500')+' mb-1">'+esc(opts.label)+'</div>':"")+
+    '<div class="flex items-center justify-between gap-2 flex-wrap">'+
+      '<div class="flex items-center gap-1.5 min-w-0">'+
+        '<span class="text-[10px] '+(dark?'opacity-70':'text-stone-500')+' shrink-0">من</span>'+
+        '<span class="text-[13px] font-bold tnum '+(dark?'':'text-stone-900')+'" dir="ltr">'+fmtDate(from)+'</span>'+
+        '<span class="text-[10px] '+(dark?'opacity-70':'text-stone-500')+' shrink-0 mr-1">إلى</span>'+
+        '<span class="text-[13px] font-bold tnum '+(dark?'':'text-stone-900')+'" dir="ltr">'+fmtDate(to)+'</span>'+
+      '</div>'+
+      '<span class="text-[10px] font-bold rounded-full px-2 py-0.5 shrink-0 '+(dark?'bg-white/20':'bg-stone-900 text-white')+'">'+monthsWord(months)+'</span>'+
+    '</div></div>';
+}
 function periodAr(from,to){return 'من <span class="tnum" dir="ltr">'+fmtDate(from)+'</span> إلى <span class="tnum" dir="ltr">'+fmtDate(to)+'</span>';}
 function ownerDocSection(o){
   const N=ownerMonthsFor(o); let total=0, ownerEst=false, ownerBeyond=false; const missSet=new Set();
@@ -2517,6 +2610,7 @@ function render(){
         '<div class="flex gap-1.5 mt-2"><button data-act="backup" class="inline-flex items-center gap-1 rounded-lg bg-stone-900 text-white px-2.5 py-1.5 text-xs font-semibold">'+icon("download",13)+' نزّل نسخة احتياطية</button>'+
           '<button data-act="bkSnooze" class="rounded-lg border border-amber-300 text-amber-700 px-2.5 py-1.5 text-xs font-medium">لاحقًا</button></div></div></div></div>'+html;
   }
+  if(state.quickPay) html+=quickPayModal();
   paint(html);
 }
 function paint(html){
@@ -2615,10 +2709,14 @@ function renderSyncBar(){
 }
 function findUnit(code){for(const o of state.owners)for(const u of o.units)if(u.code===code)return {o,u};return null;}
 function handleClick(e){
+  // ضغط على خلفية نافذة السداد = إغلاق
+  if(state.quickPay && e.target && e.target.getAttribute && e.target.getAttribute("data-qp-backdrop")==="1"){
+    state.quickPay=null; render(); return;
+  }
   const t=e.target.closest("[data-act]"); if(!t)return;
   const act=t.dataset.act;
   // وضع الاطّلاع فقط: امنع أي إجراء بيغيّر البيانات (لازم يكون أول حاجة)
-  if(state.readOnly && ["edSave","oEdSave","recordPay","bulkConfirm","doClear","applyReplace","applyUpdate","revAccept","revKeep","revAcceptAll","revKeepAll","revFixSettled","editUnit","editOwner","upload","restoreAuto","askClear","toggleCollect","delPay","ownInc","ownDec","setTagMode"].indexOf(act)>-1){
+  if(state.readOnly && ["edSave","oEdSave","recordPay","bulkConfirm","doClear","applyReplace","applyUpdate","revAccept","revKeep","revAcceptAll","revKeepAll","revFixSettled","editUnit","editOwner","upload","restoreAuto","askClear","toggleCollect","delPay","ownInc","ownDec","setTagMode","quickPay","qpConfirm","qpAll","fixGaps","stuckDelAll"].indexOf(act)>-1){
     state.flash="وضع الاطّلاع فقط — سجّل دخول عشان تعدّل."; render(); return;
   }
   if(act==="upload"){document.getElementById("fileInput").click();}
@@ -2768,6 +2866,44 @@ function handleClick(e){
     });
     computeAll(); markChange(filled); save();
     state.flash="اتكتب الإيجار في "+filled+" شهر — الفجوات اتصلّحت ✓"; render(); }
+  else if(act==="quickPay"){ syncMainFromDOM();
+    const code=t.dataset.code; const f=findUnit(code); if(!f)return;
+    const m2=ensureMain();
+    const months=parseInt(t.dataset.months,10)||ownerMonthsFor(f.o)||1;
+    state.quickPay={code, months, amount:parseFloat(t.dataset.amt)||dueAmount(f.u,months),
+      date:m2.payDate||todayYmd(), source:m2.source||"CIB OSOOL", sourceOther:m2.sourceOther||""};
+    render(); }
+  else if(act==="qpAll"){ const o=state.owner; if(!o)return;
+    const nM=ownerMonthsFor(o); const m2=ensureMain();
+    const units=o.units.filter(u=>unitVisible(u)&&!unitExcluded(u)).filter(u=>unitMonthsBreakdown(u,nM).total>0);
+    if(!units.length){ state.flash="مفيش مستحقات."; render(); return; }
+    const total=units.reduce((s2,u)=>s2+Math.round(unitMonthsBreakdown(u,nM).total),0);
+    if(!window.confirm("هيتسجّل سداد "+fmt(total)+" ج.م على "+units.length+" وحدة ("+nM+" شهر لكل وحدة). تمام؟")) return;
+    let n=0, anyLeft=0;
+    units.forEach(u=>{ const amt=Math.round(unitMonthsBreakdown(u,nM).total);
+      recordPayment(u, amt, m2.payDate||todayYmd(), m2.source||"CIB OSOOL", "");
+      const p=(u.payments||[])[u.payments.length-1]; if(p&&p.leftover>0)anyLeft+=p.leftover; n++; });
+    computeAll(); markChange(n); save();
+    state.flash="اتسجّل سداد "+n+" وحدة بإجمالي "+fmt(total)+" ج.م"+(anyLeft?(" ⚠️ فيه "+fmt(anyLeft)+" فائض ما اترحّلش."):" ✓");
+    render(); }
+  else if(act==="qpClose"){ state.quickPay=null; render(); }
+  else if(act==="qpM"){ const q=state.quickPay; if(!q)return; qpSync();
+    const d=parseInt(t.dataset.d,10)||0; q.months=Math.max(1,q.months+d);
+    const f=findUnit(q.code); if(f) q.amount=Math.round(dueAmount(f.u,q.months));
+    render(); }
+  else if(act==="qpSrc"){ const q=state.quickPay; if(!q)return; qpSync(); q.source=t.dataset.s; render(); }
+  else if(act==="qpConfirm"){ const q=state.quickPay; if(!q)return; qpSync();
+    const f=findUnit(q.code); if(!f){ state.quickPay=null; render(); return; }
+    const amt=Math.round(q.amount||0);
+    if(!(amt>0)){ state.flash="اكتب مبلغ صحيح."; render(); return; }
+    const note=(q.source==="Other")?(q.sourceOther||""):"";
+    recordPayment(f.u, amt, q.date, q.source, note);
+    const p=(f.u.payments||[])[f.u.payments.length-1];
+    computeAll(); markChange(1); save();
+    state.quickPay=null;
+    state.flash="اتسجّل سداد "+fmt(amt)+" ج.م لـ"+esc(f.u.code)+
+      (p&&p.leftover>0?(" ⚠️ منهم "+fmt(p.leftover)+" فائض ما اترحّلش — راجع جدول الوحدة."):" ✓");
+    render(); }
   else if(act==="openStuck"){ syncMainFromDOM(); state.view="stuck"; window.scrollTo(0,0); render(); }
   else if(act==="stuckDelAll"){ const list=stuckPayments().filter(x=>x.full);
     if(!list.length) return;
