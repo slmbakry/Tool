@@ -263,6 +263,12 @@ function blindBannerHTML(){
 }
 // دفعات فيها فائض ما اترحّلش على أي شهر (نتيجة عطل الأصفار القديم)
 // شهور فاضية في نص الجدول (بتوقف الترحيل)
+// شهور اتحددت يدويًا إنها متتجاهلش من حساب المستحق (فجوة سداد اتقرر تجاهلها، أو فرق زيادة سنوية متجاهل)
+function isIgnoredIdx(u,idx){ return !!(u.ignoredIdx && u.ignoredIdx[idx]); }
+function setIgnoredIdx(u,idx,val){
+  if(!u.ignoredIdx) u.ignoredIdx={};
+  if(val) u.ignoredIdx[idx]=true; else delete u.ignoredIdx[idx];
+}
 function gridGaps(u){
   const all=Object.keys(u.grid).map(Number).sort((a,b)=>a-b);
   const real=all.filter(i=>u.grid[i].due>0);
@@ -285,6 +291,39 @@ function gapWarnHTML(){
     (out.length>6?'<div class="text-[10px] text-red-700 mt-1">و'+(out.length-6)+' وحدة كمان…</div>':'')+
     '<div class="text-[10px] text-red-700 mt-1.5">اكتب قيمة الإيجار للشهور دي (أو امسح صفوفها) عشان السداد يترحّل صح.</div>'+
     '<button data-act="fixGaps" class="w-full mt-2 rounded-xl bg-red-600 text-white py-2 text-[11px] font-bold">'+icon("refresh",12)+' املا الشهور الفاضية بآخر إيجار معروف</button></div>';
+}
+// ===== مراجعة السداد: فجوات (شهور مش مسددة خالص وبعدها شهور مسددة) + دفعات جزئية =====
+// فجوة سداد = مجموعة شهور متتالية مستحقة (due>0) ومفيش عليها أي سداد (paid=0)،
+// وبعدها في الجدول شهر مسدد بالكامل — يعني «سيبتها ومشيت» مش «لسه واصل هنا».
+function unpaidBlocks(u){
+  const all=Object.keys(u.grid).map(Number).sort((a,b)=>a-b);
+  const isUnpaid=(i)=>{ const g=u.grid[i]; return g&&g.due>0&&!isIgnoredIdx(u,i)&&(g.paid||0)<=0.0001&&(g.due-(g.paid||0))>0.0001; };
+  const isPaidFull=(i)=>{ const g=u.grid[i]; return g&&g.due>0&&!isIgnoredIdx(u,i)&&(g.due-(g.paid||0))<=0.0001; };
+  const blocks=[]; let i=0;
+  while(i<all.length){
+    if(isUnpaid(all[i])){
+      const block=[]; let j=i;
+      while(j<all.length && isUnpaid(all[j])){ block.push(all[j]); j++; }
+      if(all.slice(j).some(k=>isPaidFull(k))) blocks.push(block);   // فيه شهر مسدد بعدها فعلًا
+      i=j;
+    } else i++;
+  }
+  return blocks;
+}
+// دفعات جزئية = شهر مستحق اتسدد منه جزء بس (زي زيادة سنوية متدفوعتش) — في أي مكان بالجدول
+function partialMonths(u){
+  const all=Object.keys(u.grid).map(Number).sort((a,b)=>a-b);
+  return all.filter(i=>{ const g=u.grid[i]; if(!g||!(g.due>0)||isIgnoredIdx(u,i)) return false;
+    const paid=g.paid||0; return paid>0.0001 && (g.due-paid)>0.0001; });
+}
+function paymentReviews(){
+  const gaps=[], partials=[];
+  state.owners.forEach(o=>o.units.forEach(u=>{ if(!unitVisible(u)||unitExcluded(u))return;
+    const bk=(u.reviewKept)||{};
+    unpaidBlocks(u).forEach(block=>{ const key=block.join(","); if(!bk[key]) gaps.push({o,u,block,key}); });
+    partialMonths(u).forEach(idx=>{ const key="p"+idx; if(!bk[key]) partials.push({o,u,idx,key}); });
+  }));
+  return {gaps,partials};
 }
 function stuckPayments(){
   const out=[];
@@ -555,7 +594,7 @@ function unitMonthsBreakdown(u,n){
   const lastReal=realIdx.length?realIdx[realIdx.length-1]:null;
   // فجوة حقيقية = شهر بصفر وبعده شهور بقيم حقيقية (سطر متنسي في الملف)
   // أما الأصفار في آخر الجدول فمعناها إن الملف مخلّصش — دي تتقدّر عادي
-  const firstUnpaid=all.filter(i=>u.grid[i].due>0&&(u.grid[i].due-u.grid[i].paid)>0.0001)[0];
+  const firstUnpaid=all.filter(i=>u.grid[i].due>0&&!isIgnoredIdx(u,i)&&(u.grid[i].due-u.grid[i].paid)>0.0001)[0];
   const take=[]; const gapMonths=[];
   if(firstUnpaid!=null){
     for(let k=all.indexOf(firstUnpaid); k<all.length && take.length<N; k++){
@@ -564,6 +603,7 @@ function unitMonthsBreakdown(u,n){
         if(lastReal!=null && i<lastReal){ gapMonths.push(i); break; }  // فجوة في النص -> وقف وتحذير
         break;                                                        // أصفار في الآخر -> كمّل بالتقدير
       }
+      if(isIgnoredIdx(u,i)) continue;              // شهر متجاهل — يتخطّى بهدوء زي المسدد
       if((g.due-(g.paid||0))>0.0001) take.push(i);
     }
   }
@@ -579,6 +619,7 @@ function unitMonthsBreakdown(u,n){
     while(lines.length<N && rentGuess>0 && lastIdx!=null && guard++<120){
       lastIdx+=1;
       if(u.grid[lastIdx] && u.grid[lastIdx].due>0){          // لو لقى قسط حقيقي، ياخده كما هو
+        if(isIgnoredIdx(u,lastIdx)) continue;                  // متجاهل — يتخطّى
         const g=u.grid[lastIdx], paid=g.paid||0;
         if((g.due-paid)>0.0001) lines.push({idx:lastIdx,from:periodStart(anchor,lastIdx),to:addDaysYmd(periodStart(anchor,lastIdx+1),-1),due:g.due,paid,value:g.due-paid,partial:paid>0.0001});
         continue;
@@ -653,6 +694,7 @@ function recordPayment(u,amount,dateYmd,source,note){
       if(firstReal!=null && lastReal!=null && idx>firstReal && idx<lastReal){ hitGap=true; break; }
       continue;
     }
+    if(isIgnoredIdx(u,idx)) continue;                       // متجاهل — يتخطّاه السداد بهدوء
     const need=g.due-g.paid; if(need<=0.0001)continue;
     const pay=Math.min(need,remaining); if(pay<=0)break;
     g.paid+=pay; remaining-=pay; allocated.push({idx,amt:pay});
@@ -1161,7 +1203,7 @@ function viewMain(){
   const tBtn=(act,ic,label,cls)=>'<button data-act="'+act+'" class="inline-flex flex-col items-center justify-center gap-1 rounded-2xl px-1 py-2 text-[10px] font-bold border shadow-sm transition active:scale-95 '+cls+'">'+icon(ic,18)+'<span class="truncate max-w-full px-0.5">'+label+'</span></button>';
   const hasTags=allTags().length>0;
   const nNotes=collectNotes().length;
-  const nRev=anchorReviews().length;
+  const nRev=(function(){ const pr=paymentReviews(); return anchorReviews().length+pr.gaps.length+pr.partials.length; })();
   const moreCount=(hasTags?1:0)+1+1+(nRev?1:0); // تسويات + Excel + تقييم + مراجعة
   const moreBadge=nRev?nRev:null;
   const toolbar='<div class="maintb"><div class="grid grid-cols-5 gap-1.5">'+
@@ -1760,7 +1802,71 @@ function viewStuck(){
       '<div class="text-[11px] text-red-700 mb-2">إجمالي الفائض: <b>'+fmt(list.reduce((s,x)=>s+x.left,0))+' ج.م</b></div>'+
       (fullyStuck.length?'<button data-act="stuckDelAll" class="w-full rounded-xl bg-red-600 text-white py-2 text-[12px] font-bold">امسح الـ'+fullyStuck.length+' دفعة اللي ملهاش أثر</button>':"")+
     '</div>'+
-    '<div class="space-y-2">'+cards+'</div>'+metaFooter();
+    '<div class="space-y-2">'+cards+'</div>'+payHTML+metaFooter();
+}
+// ===== عرض فجوات السداد + الدفعات الجزئية (بعد أقسام مراجعة الأنكور) =====
+// شهور متجاهلة حاليًا (على مستوى كل الوحدات) — مع إمكانية التراجع
+function ignoredSummaryHTML(){
+  const rows=[];
+  state.owners.forEach(o=>o.units.forEach(u=>{ if(!u.ignoredIdx)return;
+    const idxs=Object.keys(u.ignoredIdx).map(Number).sort((a,b)=>a-b); if(!idxs.length)return;
+    const amt=idxs.reduce((s,i)=>{ const g=u.grid[i]; return s+(g?Math.max(0,(g.due||0)-(g.paid||0)):0); },0);
+    rows.push({o,u,idxs,amt});
+  }));
+  if(!rows.length) return "";
+  return '<div class="mt-4"><div class="text-[13px] font-bold text-stone-700 mb-1.5">'+icon("check",14)+' شهور متجاهلة حاليًا ('+rows.length+' وحدة)</div>'+
+    '<div class="space-y-2">'+rows.map(r=>
+      '<div class="rounded-2xl border border-stone-200 bg-stone-50 p-3">'+
+        '<div class="flex items-center justify-between gap-2 mb-1"><span class="font-mono text-[11px] text-stone-500">'+esc(r.u.code)+'</span>'+
+          '<span class="text-[11px] text-stone-500">'+esc(r.o.name)+'</span></div>'+
+        '<div class="text-[11px] text-stone-600 mb-2">'+r.idxs.map(i=>monLabel(i)).join("، ")+' · بقيمة <b>'+fmt(r.amt)+'</b></div>'+
+        '<button data-act="payRestore" data-code="'+esc(r.u.code)+'" data-idxs="'+esc(JSON.stringify(r.idxs))+'" class="w-full rounded-xl border border-stone-300 bg-white py-1.5 text-[11px] font-medium text-stone-600">'+icon("refresh",11)+' رجّعها متأخرة</button>'+
+      '</div>').join("")+'</div></div>';
+}
+function renderPaymentReviews(pr){
+  const ign=ignoredSummaryHTML();
+  if(!pr.gaps.length && !pr.partials.length) return ign;
+  const per=(u,idx)=>{ const anchor=unitAnchor(u)||{day:1,month:1};
+    return fmtDate(periodStart(anchor,idx))+" ← "+fmtDate(addDaysYmd(periodStart(anchor,idx+1),-1)); };
+  const gapCards=pr.gaps.map(x=>{ const u=x.u,o=x.o,block=x.block;
+    const total=block.reduce((s,i)=>s+(u.grid[i].due||0),0);
+    const from=per(u,block[0]).split(" ← ")[0], to=per(u,block[block.length-1]).split(" ← ")[1];
+    return '<div class="rounded-2xl border border-orange-200 bg-white p-3.5">'+
+      '<div class="flex items-center justify-between gap-2 mb-1"><span class="font-mono text-[11px] text-stone-500">'+esc(u.code)+'</span>'+
+        '<span class="text-[11px] text-stone-500">'+esc(o.name)+'</span></div>'+
+      '<div class="text-sm font-semibold mb-2">'+esc([u.project,(norm(u.block)+norm(u.bldg)),u.apt].filter(Boolean).join(" "))+'</div>'+
+      '<div class="rounded-xl border border-orange-200 bg-orange-50 p-2.5 text-[11px] text-orange-900 mb-2.5">'+
+        '<div class="font-semibold mb-0.5">'+block.length+' شهر مش مسدد — وبعدهم شهور مسددة</div>'+
+        '<div dir="ltr" class="tnum">'+esc(from)+' ← '+esc(to)+'</div>'+
+        '<div class="mt-0.5">'+block.map(i=>monLabel(i)).join("، ")+' · إجمالي <b>'+fmt(total)+'</b></div>'+
+      '</div>'+
+      '<div class="flex gap-2">'+
+        '<button data-act="payKeepGap" data-code="'+esc(u.code)+'" data-key="'+esc(x.key)+'" class="flex-1 rounded-xl border border-stone-300 bg-white py-2 text-[12px] font-medium text-stone-600">سيبها متأخر</button>'+
+        '<button data-act="payIgnoreGap" data-code="'+esc(u.code)+'" data-block="'+esc(JSON.stringify(block))+'" data-key="'+esc(x.key)+'" class="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl bg-orange-600 text-white py-2 text-[12px] font-bold">'+icon("x",13)+' تجاهلها</button>'+
+      '</div></div>';
+  }).join("");
+  const partCards=pr.partials.map(x=>{ const u=x.u,o=x.o,idx=x.idx,g=u.grid[idx];
+    const rem=g.due-(g.paid||0);
+    return '<div class="rounded-2xl border border-amber-200 bg-white p-3.5">'+
+      '<div class="flex items-center justify-between gap-2 mb-1"><span class="font-mono text-[11px] text-stone-500">'+esc(u.code)+'</span>'+
+        '<span class="text-[11px] text-stone-500">'+esc(o.name)+'</span></div>'+
+      '<div class="text-sm font-semibold mb-2">'+esc([u.project,(norm(u.block)+norm(u.bldg)),u.apt].filter(Boolean).join(" "))+'</div>'+
+      '<div class="rounded-xl border border-amber-200 bg-amber-50 p-2.5 text-[11px] text-amber-900 mb-2.5">'+
+        '<div class="font-semibold mb-0.5">'+esc(monLabel(idx))+' — مسدد منه جزء بس</div>'+
+        '<div class="mt-0.5">مستحق <b>'+fmt(g.due)+'</b> · مسدد <b>'+fmt(g.paid||0)+'</b> · متبقي <b class="text-amber-900">'+fmt(rem)+'</b></div>'+
+      '</div>'+
+      '<div class="flex gap-2">'+
+        '<button data-act="payKeepGap" data-code="'+esc(u.code)+'" data-key="'+esc(x.key)+'" class="flex-1 rounded-xl border border-stone-300 bg-white py-2 text-[12px] font-medium text-stone-600">سيب المتبقي متأخر</button>'+
+        '<button data-act="payIgnorePartial" data-code="'+esc(u.code)+'" data-idx="'+idx+'" data-key="'+esc(x.key)+'" class="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl bg-amber-600 text-white py-2 text-[12px] font-bold">'+icon("x",13)+' تجاهل المتبقي</button>'+
+      '</div></div>';
+  }).join("");
+  return (pr.gaps.length?'<div class="mt-4"><div class="text-[13px] font-bold text-stone-700 mb-1.5">'+icon("banknote",14)+' فجوات سداد ('+pr.gaps.length+')</div>'+
+    '<p class="text-[11px] text-stone-500 mb-2">شهور مستحقة اتوقف سدادها ثم استؤنف — قرّر لكل حالة: تتجاهل (تبطّل تُحسب متأخرة) أو تفضل متأخرة.</p>'+
+    '<div class="space-y-2">'+gapCards+'</div></div>':"")+
+  (pr.partials.length?'<div class="mt-4"><div class="text-[13px] font-bold text-stone-700 mb-1.5">'+icon("banknote",14)+' دفعات جزئية ('+pr.partials.length+')</div>'+
+    '<p class="text-[11px] text-stone-500 mb-2">شهور اتسددت جزئيًا (زي زيادة سنوية متدفوعتش). اختار تتجاهل الفرق ولا يفضل متأخر.</p>'+
+    '<div class="space-y-2">'+partCards+'</div></div>':"")+
+  ign;
 }
 function viewReview(){
   const list=anchorReviews();
@@ -1771,7 +1877,12 @@ function viewReview(){
   const head='<button data-act="back" data-to="main" class="inline-flex items-center gap-1.5 text-sm font-medium text-stone-600 mb-2">'+icon("arrowRight",16)+' رجوع</button>'+
     '<div class="rounded-3xl border border-stone-200 bg-white p-4"><h2 class="text-lg font-bold flex items-center gap-2">'+icon("alert",18)+' مراجعة</h2>'+
     '<p class="text-xs text-stone-500 mt-1">وحدات دورة السداد فيها متعارضة: المحسوب من <b>نهاية العقد</b> مختلف عن المستنتج من <b>«مسدد حتى تاريخ»</b>. راجع واعتمد الصح — مفيش أي تغيير بيحصل قبل موافقتك.</p></div>';
-  if(!list.length) return head+'<p class="text-center text-stone-400 py-12 text-sm">مفيش حالات محتاجة مراجعة. 👌</p>'+metaFooter();
+  const pr=paymentReviews();
+  const payHTML=renderPaymentReviews(pr);
+  const anyIgnored=state.owners.some(o=>o.units.some(u=>u.ignoredIdx&&Object.keys(u.ignoredIdx).length));
+  if(!list.length && !pr.gaps.length && !pr.partials.length && !anyIgnored)
+    return head+'<p class="text-center text-stone-400 py-12 text-sm">مفيش حالات محتاجة مراجعة. 👌</p>'+metaFooter();
+  if(!list.length) return head+payHTML+metaFooter();
   const cards=list.map(r=>{ const u=r.u,o=r.o;
     const hd='<div class="flex items-center justify-between gap-2 mb-1"><span class="font-mono text-[11px] text-stone-500">'+esc(u.code)+'</span>'+
       '<span class="text-[11px] text-stone-500">'+esc(o.name)+'</span></div>'+
@@ -2055,7 +2166,7 @@ function inRange(d,from,to){const v=ymdToUTC(d);return (!from||v>=ymdToUTC(from)
 function unitDuePayments(u){
   const anchor=unitAnchor(u)||{day:1,month:1};
   const ev=u.payEvery||1;
-  const idxs=Object.keys(u.grid).map(Number).sort((a,b)=>a-b).filter(i=>u.grid[i].due>0&&(u.grid[i].due-u.grid[i].paid)>0.0001);
+  const idxs=Object.keys(u.grid).map(Number).sort((a,b)=>a-b).filter(i=>u.grid[i].due>0&&!isIgnoredIdx(u,i)&&(u.grid[i].due-u.grid[i].paid)>0.0001);
   const out=[]; let i=0;
   while(i<idxs.length){
     const group=idxs.slice(i,i+ev); const firstIdx=group[0], lastG=group[group.length-1];
@@ -2911,6 +3022,23 @@ function handleClick(e){
     let n=0; list.forEach(x=>{ removePayment(x.u, x.p.id); n++; });
     computeAll(); markChange(n); save(); state.flash="اتمسحت "+n+" دفعة ملهاش أثر ✓"; render(); }
   else if(act==="openReview"){ syncMainFromDOM(); state.view="review"; window.scrollTo(0,0); render(); }
+  else if(act==="payIgnoreGap"){ const f=findUnit(t.dataset.code); if(!f)return; const u=f.u;
+    let block=[]; try{ block=JSON.parse(t.dataset.block||"[]"); }catch(e){}
+    block.forEach(idx=>setIgnoredIdx(u,idx,true));
+    u.edited=true; computeAll(); markChange(block.length); save();
+    state.flash="اتجاهلت "+block.length+" شهر من المتأخر ✓"; render(); }
+  else if(act==="payIgnorePartial"){ const f=findUnit(t.dataset.code); if(!f)return; const u=f.u;
+    const idx=parseInt(t.dataset.idx,10);
+    setIgnoredIdx(u,idx,true); u.edited=true; computeAll(); markChange(1); save();
+    state.flash="اتجاهل المتبقي من "+monLabel(idx)+" ✓"; render(); }
+  else if(act==="payKeepGap"){ const f=findUnit(t.dataset.code); if(!f)return; const u=f.u;
+    if(!u.reviewKept)u.reviewKept={}; u.reviewKept[t.dataset.key]=true; u.edited=true; save();
+    state.flash="اتسجّلت متأخرة زي ما هي."; render(); }
+  else if(act==="payRestore"){ const f=findUnit(t.dataset.code); if(!f)return; const u=f.u;
+    let idxs=[]; try{ idxs=JSON.parse(t.dataset.idxs||"[]"); }catch(e){}
+    idxs.forEach(idx=>setIgnoredIdx(u,idx,false));
+    computeAll(); markChange(idxs.length); save();
+    state.flash="رجعت متأخرة تاني ✓"; render(); }
   else if(act==="revFixSettled"){ const f=findUnit(t.dataset.code); if(!f)return; const u=f.u;
     if(!u.settled)return;
     u.settled=addDaysYmd(u.settled,-1); u.settledManual=true; u.settledFixed=true; u.edited=true;
