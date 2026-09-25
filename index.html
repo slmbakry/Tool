@@ -264,6 +264,45 @@ function blindBannerHTML(){
 // دفعات فيها فائض ما اترحّلش على أي شهر (نتيجة عطل الأصفار القديم)
 // شهور فاضية في نص الجدول (بتوقف الترحيل)
 // شهور اتحددت يدويًا إنها متتجاهلش من حساب المستحق (فجوة سداد اتقرر تجاهلها، أو فرق زيادة سنوية متجاهل)
+// ===== زيادة الإيجار الغير مسددة =====
+// شهر «فرق زيادة» = اتدفع منه جزء، والجزء ده بيساوي إيجار شهر أقدم أقل (يعني اتدفع بالإيجار القديم)
+function oldRentOf(u){
+  const all=Object.keys(u.grid).map(Number).sort((a,b)=>a-b);
+  let old=null;
+  all.forEach(i=>{ const g=u.grid[i]; if(!(g&&g.due>0)) return;
+    const paid=g.paid||0;
+    if(paid>0.01 && g.due-paid>0.01){
+      const prev=all.filter(k=>k<i && u.grid[k].due>0 && u.grid[k].due<g.due-0.01 && Math.abs(u.grid[k].due-paid)<1);
+      if(prev.length) old=paid;
+    }
+  });
+  return old;
+}
+function isIncreaseIdx(u,idx){
+  const g=u.grid[idx]; if(!g||!(g.due>0)) return false;
+  const paid=g.paid||0; if(!(paid>0.01 && g.due-paid>0.01)) return false;
+  const all=Object.keys(u.grid).map(Number);
+  return all.some(k=>k<idx && u.grid[k].due>0 && u.grid[k].due<g.due-0.01 && Math.abs(u.grid[k].due-paid)<1);
+}
+// الإيجار الفعّال للشهر: لو الزيادة متجاهلة على الوحدة، أي شهر أعلى من القديم يتحسب بالقديم
+function effDue(u,idx){
+  const g=u.grid[idx]; if(!g) return 0;
+  if(u.increaseIgnored){ const o=u._oldRent!=null?u._oldRent:(u._oldRent=oldRentOf(u)); if(o && g.due>o) return o; }
+  return g.due;
+}
+function effRem(u,idx){ const g=u.grid[idx]; if(!g) return 0; return Math.max(0,effDue(u,idx)-(g.paid||0)); }
+// فروق الزيادة المعلّقة على الوحدة (لو الزيادة مش متجاهلة)
+function increaseDiff(u){
+  if(u.increaseIgnored) return {months:[],total:0,oldRent:null,newRent:null};
+  const all=Object.keys(u.grid).map(Number).sort((a,b)=>a-b);
+  const months=all.filter(i=>!isIgnoredIdx(u,i) && isIncreaseIdx(u,i));
+  const total=months.reduce((s,i)=>s+(u.grid[i].due-(u.grid[i].paid||0)),0);
+  const oldR=months.length?(u.grid[months[0]].paid||0):null;
+  const newR=months.length?u.grid[months[months.length-1]].due:null;
+  return {months,total,oldRent:oldR,newRent:newR};
+}
+// هل الشهر يدخل في عدّ الشهور العادية؟ (فروق الزيادة لأ — ليها بند منفصل)
+function isMonthSkip(u,idx){ return isIgnoredIdx(u,idx) || (!u.increaseIgnored && isIncreaseIdx(u,idx)); }
 function isIgnoredIdx(u,idx){ return !!(u.ignoredIdx && u.ignoredIdx[idx]); }
 function setIgnoredIdx(u,idx,val){
   if(!u.ignoredIdx) u.ignoredIdx={};
@@ -277,6 +316,24 @@ function gridGaps(u){
   return all.filter(i=>i>first && i<last && !(u.grid[i].due>0));
 }
 // تحذير: وحدات جدولها فيه شهور فاضية في النص (أي سداد عليها هيقف ويبقى فائض)
+// شريط تنبيهات مضغوط — سطر واحد بشرايح عدّ، والتفاصيل في شاشة «مراجعة»
+function alertsStripHTML(){
+  const chips=[];
+  const add=(n,label,act,cls)=>{ if(n>0) chips.push('<button data-act="'+act+'" class="shrink-0 inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold '+cls+'">'+
+    '<span class="font-extrabold">'+n+'</span> '+label+'</button>'); };
+  let gapUnits=0;
+  state.owners.forEach(o=>o.units.forEach(u=>{ if(!unitVisible(u)||unitExcluded(u))return; if(gridGaps(u).length) gapUnits++; }));
+  const pr=paymentReviews();
+  add(stuckPayments().length,"دفعة فائض","openStuck","border-red-300 bg-red-50 text-red-800");
+  add(gapUnits,"جدول فيه شهور فاضية","openReview","border-red-200 bg-red-50 text-red-700");
+  add(pr.gaps.length,"فجوة سداد","openReview","border-orange-200 bg-orange-50 text-orange-800");
+  add(pr.partials.length,"دفعة جزئية","openReview","border-amber-200 bg-amber-50 text-amber-800");
+  add(blindUnits().length,"بلا إيجار مسجّل","openReview","border-orange-200 bg-orange-50 text-orange-700");
+  add(anchorReviews().length,"دورة سداد متعارضة","openReview","border-violet-200 bg-violet-50 text-violet-800");
+  if(!chips.length) return "";
+  return '<div class="flex items-center gap-1.5 mb-2.5 overflow-x-auto pb-1 -mx-1 px-1">'+
+    '<span class="shrink-0 text-stone-400">'+icon("alert",13)+'</span>'+chips.join("")+'</div>';
+}
 function gapWarnHTML(){
   const out=[];
   state.owners.forEach(o=>o.units.forEach(u=>{ if(!unitVisible(u)||unitExcluded(u))return;
@@ -314,7 +371,7 @@ function unpaidBlocks(u){
 function partialMonths(u){
   const all=Object.keys(u.grid).map(Number).sort((a,b)=>a-b);
   return all.filter(i=>{ const g=u.grid[i]; if(!g||!(g.due>0)||isIgnoredIdx(u,i)) return false;
-    const paid=g.paid||0; return paid>0.0001 && (g.due-paid)>0.0001; });
+    const paid=g.paid||0; return paid>0.0001 && (g.due-paid)>0.0001 && !isIncreaseIdx(u,i); });
 }
 function paymentReviews(){
   const gaps=[], partials=[];
@@ -587,41 +644,39 @@ const MON_EN=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov",
 function monLabelEn(idx){const{y,m}=idxToYM(idx);return MON_EN[m-1]+" "+y;}
 // next n unpaid months for a unit, each with its period (from→to) and remaining value
 function unitMonthsBreakdown(u,n){
+  u._oldRent=undefined;
   const anchor=unitAnchor(u)||{day:1,month:1};
   const N=Math.max(0,n|0);
   const all=Object.keys(u.grid).map(Number).sort((a,b)=>a-b);
-  const realIdx=all.filter(i=>u.grid[i].due>0);              // الشهور اللي ليها قسط حقيقي
+  const realIdx=all.filter(i=>u.grid[i].due>0);
   const lastReal=realIdx.length?realIdx[realIdx.length-1]:null;
-  // فجوة حقيقية = شهر بصفر وبعده شهور بقيم حقيقية (سطر متنسي في الملف)
-  // أما الأصفار في آخر الجدول فمعناها إن الملف مخلّصش — دي تتقدّر عادي
-  const firstUnpaid=all.filter(i=>u.grid[i].due>0&&!isIgnoredIdx(u,i)&&(u.grid[i].due-u.grid[i].paid)>0.0001)[0];
+  // أول شهر مش مدفوع (بالإيجار الفعّال) — فروق الزيادة والمتجاهل مش بيتعدّوا هنا
+  const firstUnpaid=all.filter(i=>u.grid[i].due>0 && !isMonthSkip(u,i) && effRem(u,i)>0.0001)[0];
   const take=[]; const gapMonths=[];
   if(firstUnpaid!=null){
     for(let k=all.indexOf(firstUnpaid); k<all.length && take.length<N; k++){
       const i=all[k], g=u.grid[i];
       if(!(g.due>0)){
-        if(lastReal!=null && i<lastReal){ gapMonths.push(i); break; }  // فجوة في النص -> وقف وتحذير
-        break;                                                        // أصفار في الآخر -> كمّل بالتقدير
+        if(lastReal!=null && i<lastReal){ gapMonths.push(i); break; }
+        break;
       }
-      if(isIgnoredIdx(u,i)) continue;              // شهر متجاهل — يتخطّى بهدوء زي المسدد
-      if((g.due-(g.paid||0))>0.0001) take.push(i);
+      if(isMonthSkip(u,i)) continue;
+      if(effRem(u,i)>0.0001) take.push(i);
     }
   }
   const blocked=gapMonths.length>0;
-  const lines=take.map(idx=>{const g=u.grid[idx];const paid=g.paid||0;return {idx,from:periodStart(anchor,idx),to:addDaysYmd(periodStart(anchor,idx+1),-1),due:g.due,paid,value:g.due-paid,partial:paid>0.0001};});
-  // استكمال بشهور تقديرية بقيمة آخر قسط حقيقي — في حدود العدد المطلوب فقط
+  const lines=take.map(idx=>{const g=u.grid[idx];const paid=g.paid||0;const d=effDue(u,idx);return {idx,from:periodStart(anchor,idx),to:addDaysYmd(periodStart(anchor,idx+1),-1),due:d,paid,value:Math.max(0,d-paid),partial:paid>0.0001};});
   if(lines.length<N && !blocked){
-    const rentGuess=lastReal!=null?u.grid[lastReal].due:0;
-    // نبدأ من بعد آخر شهر مأخوذ، أو من بعد آخر شهر حقيقي في الجدول
-    // نبدأ من بعد آخر شهر مأخوذ، وإلا من بعد آخر قسط حقيقي (مش آخر صف في الجدول)
+    // التقدير بآخر إيجار فعّال (لو الزيادة متجاهلة = الإيجار القديم)
+    const rentGuess=lastReal!=null?effDue(u,lastReal):0;
     let lastIdx=lines.length?lines[lines.length-1].idx:lastReal;
     let guard=0;
     while(lines.length<N && rentGuess>0 && lastIdx!=null && guard++<120){
       lastIdx+=1;
-      if(u.grid[lastIdx] && u.grid[lastIdx].due>0){          // لو لقى قسط حقيقي، ياخده كما هو
-        if(isIgnoredIdx(u,lastIdx)) continue;                  // متجاهل — يتخطّى
-        const g=u.grid[lastIdx], paid=g.paid||0;
-        if((g.due-paid)>0.0001) lines.push({idx:lastIdx,from:periodStart(anchor,lastIdx),to:addDaysYmd(periodStart(anchor,lastIdx+1),-1),due:g.due,paid,value:g.due-paid,partial:paid>0.0001});
+      if(u.grid[lastIdx] && u.grid[lastIdx].due>0){
+        if(isMonthSkip(u,lastIdx)) continue;
+        const g=u.grid[lastIdx], paid=g.paid||0, d=effDue(u,lastIdx);
+        if((d-paid)>0.0001) lines.push({idx:lastIdx,from:periodStart(anchor,lastIdx),to:addDaysYmd(periodStart(anchor,lastIdx+1),-1),due:d,paid,value:d-paid,partial:paid>0.0001});
         continue;
       }
       const from=periodStart(anchor,lastIdx);
@@ -629,13 +684,17 @@ function unitMonthsBreakdown(u,n){
       lines.push({idx:lastIdx,from,to:addDaysYmd(periodStart(anchor,lastIdx+1),-1),due:rentGuess,paid:0,value:rentGuess,partial:false,estimated:true,beyond});
     }
   }
-  const total=lines.reduce((s,l)=>s+l.value,0);
+  // فروق الزيادة — بند منفصل؛ بتدخل الإجمالي بس لو الخانة متعلّمة على الوحدة
+  const inc=increaseDiff(u);
+  const monthsTotal=lines.reduce((s,l)=>s+l.value,0);
+  const incIncluded=!!(u.incInclude && inc.total>0);
+  const total=monthsTotal+(incIncluded?inc.total:0);
   const rr=lines.map(l=>Math.round(l.value));
   const hasPartial=lines.some(l=>l.partial);
   const hasEstimated=lines.some(l=>l.estimated);
   const hasBeyond=lines.some(l=>l.beyond);
   const hasMissingDue=lines.some(l=>l.estimated&&!l.beyond);
-  return {lines,total,count:lines.length,hasPartial,hasEstimated,hasBeyond,hasMissingDue,blocked,gapMonths,shortBy:Math.max(0,N-lines.length),equal:!hasPartial&&!hasEstimated&&rr.length>0&&rr.every(v=>v===rr[0]),perMonth:lines.length?lines[0].value:0};
+  return {lines,total,monthsTotal,inc,incIncluded,count:lines.length,hasPartial,hasEstimated,hasBeyond,hasMissingDue,blocked,gapMonths,shortBy:Math.max(0,N-lines.length),equal:!hasPartial&&!hasEstimated&&rr.length>0&&rr.every(v=>v===rr[0]),perMonth:lines.length?lines[0].value:0};
 }
 function ownerPayableUnits(o){return o.units.filter(u=>unitVisible(u)&&!unitExcluded(u)&&unitDuePayments(u).length>0);}
 function ownerMonthsFor(o){const m=state.report; if(m&&m.ownerMonths&&m.ownerMonths[o.key]!=null)return m.ownerMonths[o.key]; const pu=ownerPayableUnits(o); return Math.max(1,...pu.map(u=>u.payEvery||1));}
@@ -681,11 +740,16 @@ function recomputeSettled(u){
 }
 // allocate an amount to oldest unpaid months, log a payment
 function recordPayment(u,amount,dateYmd,source,note){
+  u._oldRent=undefined;
+  const incIdx=(u.incInclude && !u.increaseIgnored)?increaseDiff(u).months:[];
   const sorted=Object.keys(u.grid).map(Number).sort((a,b)=>a-b);
   const realIdx=sorted.filter(i=>u.grid[i].due>0);
   const firstReal=realIdx.length?realIdx[0]:null;
   const lastReal=realIdx.length?realIdx[realIdx.length-1]:null;
   let remaining=amount; const allocated=[]; let hitGap=false;
+  // فروق الزيادة (لو متعلّمة للضم) بتتسدد الأول
+  incIdx.forEach(idx=>{ if(remaining<=0.0001)return; const g=u.grid[idx]; const need=g.due-(g.paid||0);
+    if(need>0.0001){ const pay=Math.min(need,remaining); g.paid=(g.paid||0)+pay; remaining-=pay; allocated.push({idx,amt:pay,inc:true}); } });
   for(const idx of sorted){
     const g=u.grid[idx];
     // الفجوة الحقيقية = صفر بين أقساط حقيقية.
@@ -694,8 +758,8 @@ function recordPayment(u,amount,dateYmd,source,note){
       if(firstReal!=null && lastReal!=null && idx>firstReal && idx<lastReal){ hitGap=true; break; }
       continue;
     }
-    if(isIgnoredIdx(u,idx)) continue;                       // متجاهل — يتخطّاه السداد بهدوء
-    const need=g.due-g.paid; if(need<=0.0001)continue;
+    if(isMonthSkip(u,idx)) continue;                        // متجاهل أو فرق زيادة — يتخطّاه
+    const need=effDue(u,idx)-(g.paid||0); if(need<=0.0001)continue;
     const pay=Math.min(need,remaining); if(pay<=0)break;
     g.paid+=pay; remaining-=pay; allocated.push({idx,amt:pay});
     if(remaining<=0.0001)break;
@@ -703,7 +767,7 @@ function recordPayment(u,amount,dateYmd,source,note){
   // leftover beyond recorded dues -> materialize forward months at last recorded monthly rent (last may be partial)
   if(remaining>0.0001 && !hitGap){
     const dueMonths=sorted.filter(i=>u.grid[i].due>0);
-    const rentGuess=dueMonths.length?u.grid[dueMonths[dueMonths.length-1]].due:0;
+    const rentGuess=dueMonths.length?effDue(u,dueMonths[dueMonths.length-1]):0;
     // ⚠ لازم نبدأ من بعد آخر قسط حقيقي — مش من بعد آخر صف في الجدول.
     // الصفوف الفاضية اللي في الآخر لازم تتملّى الأول، وإلا هتفضل فجوة في النص.
     let lastIdx=dueMonths.length?dueMonths[dueMonths.length-1]:(sorted.length?sorted[sorted.length-1]:null);
@@ -712,7 +776,8 @@ function recordPayment(u,amount,dateYmd,source,note){
       lastIdx+=1; const pay=Math.min(rentGuess,remaining);
       const cur=u.grid[lastIdx];
       if(cur && cur.due>0){                       // صف موجود بقسط حقيقي: كمّل عليه
-        const need=cur.due-(cur.paid||0);
+        if(isMonthSkip(u,lastIdx)) continue;
+        const need=effDue(u,lastIdx)-(cur.paid||0);
         if(need>0.0001){ const p2=Math.min(need,remaining); cur.paid=(cur.paid||0)+p2; remaining-=p2; allocated.push({idx:lastIdx,amt:p2}); }
         continue;
       }
@@ -1260,7 +1325,7 @@ function viewMain(){
     '<input id="mainSearch" value="'+esc(m.q)+'" placeholder="ابحث بالمالك، المستفيد، رقم الوحدة، التليفون، أو الحساب" class="w-full rounded-xl border border-stone-200 bg-white py-2.5 pr-9 pl-8 text-[13px] outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"/>'+
     (m.q?'<button data-act="mainSearchClear" class="absolute top-1/2 -translate-y-1/2 left-2.5 text-stone-400">'+icon("x",14)+'</button>':"")+'</div>';
   const filt=filterBar()+bankBar();
-  if(!data.length) return toolbar+search+filt+range+head+gapWarnHTML()+blindBannerHTML()+searchFallbackHTML(m,data)+
+  if(!data.length) return toolbar+search+filt+range+head+alertsStripHTML()+searchFallbackHTML(m,data)+
     '<p class="text-center text-stone-400 py-12 text-sm">مفيش مستحقات '+(m.q?'مطابقة للبحث':'في المدة دي ضمن الفلتر')+'. 👌</p>'+metaFooter();
   // وحدات فيها شهر قسطه صفر (قيمة ناقصة) — لازم تنبيه صريح
   const gapUnits=[];
@@ -1372,7 +1437,7 @@ function viewMain(){
     '<button data-act="expandAll" class="inline-flex items-center gap-1 text-[11px] font-medium text-stone-500 border border-stone-200 bg-white rounded-lg px-2 py-1">'+
       icon(allOpen?"x":"chevronDown",12)+' '+(allOpen?"اضغط الكل":"افتح الكل")+'</button></div>':"";
   const groups=data.map(g=>ownerCard(g,m)).join("");
-  return toolbar+search+filt+range+head+gapWarn+stuckBanner+blindBanner+gapBanner+estBanner+benBanner+'<div class="lg:flex lg:gap-4 lg:items-start">'+
+  return toolbar+search+filt+range+head+alertsStripHTML()+gapBanner+estBanner+benBanner+'<div class="lg:flex lg:gap-4 lg:items-start">'+
     '<div class="flex-1 min-w-0">'+expandBar+'<div class="space-y-2.5">'+groups+'</div>'+outOfRange+'</div>'+
     sideHTML+
   '</div>'+(m.collect?'<div class="h-28"></div>'+collectionBar(m):metaFooter());
@@ -1495,8 +1560,25 @@ function payRow(x,m){
       '<span class="text-[11px] text-stone-500">المستحق</span>'+
       '<span class="inline-flex items-center gap-2">'+
         '<span class="text-base font-extrabold tnum">'+fmt(p.amount)+'</span>'+
-        '<button data-act="quickPay" data-code="'+esc(u.code)+'" data-amt="'+Math.round(p.amount)+'" data-months="'+(p.months||1)+'" class="inline-flex items-center gap-1 rounded-xl bg-stone-900 text-white px-3 py-1.5 text-[11px] font-bold active:scale-[0.97]">'+icon("banknote",12)+' سداد</button>'+
+        '<button data-act="quickPay" data-code="'+esc(u.code)+'" data-amt="'+Math.round(p.amount+((u.incInclude&&!u.increaseIgnored)?increaseDiff(u).total:0))+'" data-months="'+(p.months||1)+'" class="inline-flex items-center gap-1 rounded-xl bg-stone-900 text-white px-3 py-1.5 text-[11px] font-bold active:scale-[0.97]">'+icon("banknote",12)+' سداد</button>'+
       '</span>'+
+    '</div>'+increaseAlertHTML(u)+'</div>';
+}
+// ===== تنبيه فرق الزيادة على الوحدة (خانة ضم + زر تجاهل) =====
+function increaseAlertHTML(u){
+  if(u.increaseIgnored){
+    return '<div class="mt-2 rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-1.5 flex items-center justify-between gap-2">'+
+      '<span class="text-[10.5px] text-stone-600">الزيادة متجاهلة — الحساب بالإيجار القديم <b class="tnum">'+fmt(oldRentOf(u)||0)+'</b></span>'+
+      '<button data-act="incRestore" data-code="'+esc(u.code)+'" class="shrink-0 text-[10px] font-semibold text-stone-600 border border-stone-300 bg-white rounded-lg px-2 py-0.5">رجّع الزيادة</button></div>';
+  }
+  const inc=increaseDiff(u); if(!(inc.total>0)) return "";
+  return '<div class="mt-2 rounded-xl border border-amber-300 bg-amber-50 px-2.5 py-2">'+
+    '<div class="text-[11px] font-bold text-amber-900">⚠ زيادة إيجار غير مسددة: <span class="tnum">'+fmt(inc.total)+'</span></div>'+
+    '<div class="text-[10px] text-amber-800 mt-0.5">'+inc.months.map(i=>monLabel(i)).join("، ")+' اتدفعوا بـ<span class="tnum">'+fmt(inc.oldRent)+'</span> بدل <span class="tnum">'+fmt(inc.newRent)+'</span></div>'+
+    '<div class="flex items-center justify-between gap-2 mt-1.5">'+
+      '<label class="inline-flex items-center gap-1.5 text-[11px] font-semibold text-amber-900 cursor-pointer">'+
+        '<input type="checkbox" class="inc-inc w-4 h-4 accent-amber-600" data-code="'+esc(u.code)+'"'+(u.incInclude?" checked":"")+'/> ضمّ الفرق للتحويل</label>'+
+      '<button data-act="incIgnore" data-code="'+esc(u.code)+'" class="text-[10px] font-semibold text-stone-600 border border-stone-300 bg-white rounded-lg px-2 py-0.5">تجاهل الزيادة</button>'+
     '</div></div>';
 }
 // ===== نافذة السداد المباشر =====
@@ -1526,6 +1608,11 @@ function quickPayModal(){
             '<button data-act="qpM" data-d="1" class="w-10 h-10 rounded-xl border border-stone-300 bg-white text-lg font-bold">+</button>'+
           '</div>'+
           (b.hasEstimated?'<p class="text-[10px] text-amber-600 mt-1">فيه شهور تقديرية</p>':"")+
+          ((b.inc&&b.inc.total>0)?'<div class="mt-2 rounded-xl border border-amber-300 bg-amber-50 px-2.5 py-1.5">'+
+            '<label class="flex items-center justify-between gap-2 text-[11px] font-semibold text-amber-900 cursor-pointer">'+
+              '<span class="inline-flex items-center gap-1.5"><input type="checkbox" class="inc-inc w-4 h-4 accent-amber-600" data-code="'+esc(u.code)+'"'+(u.incInclude?" checked":"")+'/> ضمّ فرق الزيادة</span>'+
+              '<span class="tnum">+'+fmt(b.inc.total)+'</span></label>'+
+            '<div class="text-[10px] text-amber-800 mt-0.5">'+b.inc.months.map(i=>monLabel(i)).join("، ")+'</div></div>':"")+
           (b.blocked?'<p class="text-[10px] text-red-600 mt-1">⚠ فيه شهر فاضي في الجدول — السداد هيقف عنده</p>':"")+
         '</div>'+
         '<div><label class="block text-[11px] text-stone-500 mb-1">تاريخ السداد</label>'+
@@ -1652,6 +1739,7 @@ function viewOwnerDetail(){
           '<span class="text-sm font-bold tnum">'+fmt(amt)+'</span>'+
           '<button data-act="quickPay" data-code="'+esc(u.code)+'" data-amt="'+amt+'" data-months="'+nMonths+'" class="inline-flex items-center gap-1 rounded-xl bg-stone-900 text-white px-3 py-1.5 text-[11px] font-bold">'+icon("banknote",12)+' سداد</button>'+
         '</span></div>':"")+
+      increaseAlertHTML(u)+
       '</div>';
   }).join("");
   const payAllBtn=(units.length>1&&ownerTotal>0)?'<button data-act="qpAll" class="w-full mt-2 inline-flex items-center justify-center gap-2 rounded-2xl border-2 border-stone-900 bg-white py-2.5 text-[12px] font-bold text-stone-900">'+icon("banknote",14)+' سدّد كل وحدات المالك · '+fmt(ownerTotal)+'</button>':"";
@@ -1878,9 +1966,10 @@ function viewReview(){
     '<div class="rounded-3xl border border-stone-200 bg-white p-4"><h2 class="text-lg font-bold flex items-center gap-2">'+icon("alert",18)+' مراجعة</h2>'+
     '<p class="text-xs text-stone-500 mt-1">وحدات دورة السداد فيها متعارضة: المحسوب من <b>نهاية العقد</b> مختلف عن المستنتج من <b>«مسدد حتى تاريخ»</b>. راجع واعتمد الصح — مفيش أي تغيير بيحصل قبل موافقتك.</p></div>';
   const pr=paymentReviews();
-  const payHTML=renderPaymentReviews(pr);
+  const payHTML=gapWarnHTML()+blindBannerHTML()+renderPaymentReviews(pr);
   const anyIgnored=state.owners.some(o=>o.units.some(u=>u.ignoredIdx&&Object.keys(u.ignoredIdx).length));
-  if(!list.length && !pr.gaps.length && !pr.partials.length && !anyIgnored)
+  const anyGridGap=state.owners.some(o=>o.units.some(u=>unitVisible(u)&&!unitExcluded(u)&&gridGaps(u).length));
+  if(!list.length && !pr.gaps.length && !pr.partials.length && !anyIgnored && !anyGridGap && !blindUnits().length)
     return head+'<p class="text-center text-stone-400 py-12 text-sm">مفيش حالات محتاجة مراجعة. 👌</p>'+metaFooter();
   if(!list.length) return head+payHTML+metaFooter();
   const cards=list.map(r=>{ const u=r.u,o=r.o;
@@ -2166,12 +2255,13 @@ function inRange(d,from,to){const v=ymdToUTC(d);return (!from||v>=ymdToUTC(from)
 function unitDuePayments(u){
   const anchor=unitAnchor(u)||{day:1,month:1};
   const ev=u.payEvery||1;
-  const idxs=Object.keys(u.grid).map(Number).sort((a,b)=>a-b).filter(i=>u.grid[i].due>0&&!isIgnoredIdx(u,i)&&(u.grid[i].due-u.grid[i].paid)>0.0001);
+  u._oldRent=undefined;
+  const idxs=Object.keys(u.grid).map(Number).sort((a,b)=>a-b).filter(i=>u.grid[i].due>0&&!isMonthSkip(u,i)&&effRem(u,i)>0.0001);
   const out=[]; let i=0;
   while(i<idxs.length){
     const group=idxs.slice(i,i+ev); const firstIdx=group[0], lastG=group[group.length-1];
-    const amount=group.reduce((s,idx)=>s+(u.grid[idx].due-u.grid[idx].paid),0);
-    const gross=group.reduce((s,idx)=>s+u.grid[idx].due,0);
+    const amount=group.reduce((s,idx)=>s+effRem(u,idx),0);
+    const gross=group.reduce((s,idx)=>s+effDue(u,idx),0);
     const paidSum=group.reduce((s,idx)=>s+(u.grid[idx].paid||0),0);
     out.push({dueDate:periodStart(anchor,firstIdx),months:group.length,amount,gross,paid:paidSum,partial:paidSum>0.0001,estimated:false,beyond:false,from:periodStart(anchor,firstIdx),to:addDaysYmd(periodStart(anchor,lastG+1),-1),firstIdx,lastIdx:lastG});
     i+=ev;
@@ -2181,7 +2271,7 @@ function unitDuePayments(u){
   const allDueIdx=Object.keys(u.grid).map(Number).filter(i=>u.grid[i].due>0).sort((a,b)=>a-b);
   if(allDueIdx.length){
     const lastKnown=allDueIdx[allDueIdx.length-1];
-    const rentGuess=u.grid[lastKnown].due;
+    const rentGuess=effDue(u,lastKnown);
     if(rentGuess>0){
       const horizon=addDaysYmd(todayYmd(),RENEWAL_WINDOW);
       let cur=lastKnown, guard=0;
@@ -2307,55 +2397,135 @@ function reportShell(title,filterLine,bodyHtml){
   const header="<div class='rh'><div><div class='rh-co'>أصول ريزيدنس</div><div class='rh-en'>OSOOL RESIDENCE</div></div>"+
     "<div><div class='rh-title'>"+esc(title)+"</div><div class='rh-meta'>"+(filterLine?esc(filterLine)+" · ":"")+"طُبع "+date+"</div></div></div>";
   const footer="<div class='rf'><span>أصول ريزيدنس — "+esc(title)+"</span><span>"+date+"</span></div>";
-  return "<!doctype html><html dir='rtl' lang='ar'><head><meta charset='utf-8'><title>"+esc(title)+"</title><link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap' rel='stylesheet'><style>"+PRINT_CSS+"</style></head><body><div class='wrap'>"+header+bodyHtml+footer+"</div></body></html>";
+  return "<!doctype html><html dir='rtl' lang='ar'><head><meta charset='utf-8'><title>"+esc(title)+"</title><link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap' rel='stylesheet'><style>"+PRINT_CSS+RPT_BOX+"</style></head><body><div class='wrap'>"+header+bodyHtml+footer+"</div></body></html>";
 }
 function openPrint(html){ const w=window.open("","_blank"); if(!w){alert("اسمح بالنوافذ المنبثقة عشان الطباعة تشتغل.");return;} w.document.write(html); w.document.close(); w.focus(); setTimeout(function(){try{w.print();}catch(e){}},400); }
+// «مسدد حتى» للوحدة: المسجّل، وإلا آخر شهر مسدد بالكامل بالتتابع
+function settledOf(u){
+  if(u.settled) return u.settled;
+  const anchor=unitAnchor(u)||{day:1,month:1};
+  const all=Object.keys(u.grid).map(Number).sort((a,b)=>a-b).filter(i=>u.grid[i].due>0);
+  let last=null;
+  for(const i of all){ if(isMonthSkip(u,i) || effRem(u,i)<=0.0001) last=i; else break; }
+  return last!=null?addDaysYmd(periodStart(anchor,last+1),-1):null;
+}
+// صفوف وحدة واحدة في ورقة التحويل + فروق الزيادة كبند منفصل
+function docUnitBlock(u,N,ownerLabel){
+  const ds=a=>a?(String(a.d).padStart(2,"0")+"/"+String(a.m).padStart(2,"0")+"/"+a.y):"—";
+  const per=(f,t)=>"من <bdi dir='ltr'>"+ds(f)+"</bdi> إلى <bdi dir='ltr'>"+ds(t)+"</bdi>";
+  const b=unitMonthsBreakdown(u,N);
+  const inc=b.inc||{months:[],total:0};
+  if(!b.count && !(inc.total>0)) return null;
+  const beds=norm(u.beds)?" · "+esc(u.beds)+" غرف":"";
+  const st=settledOf(u);
+  let rows="<tr class='uh'><td colspan='4'>"+esc([u.project,(norm(u.block)+norm(u.bldg)),u.apt].filter(Boolean).join(" · "))+
+    "<span class='uhs'>"+beds+(st?" · مسدد حتى <bdi dir='ltr'>"+ds(st)+"</bdi>":"")+(ownerLabel?" · "+esc(ownerLabel):"")+"</span></td></tr>";
+  const missSet=new Set(); let beyond=false;
+  if(b.count){
+    const tags=b.lines.map(l=>{ if(l.estimated&&!l.beyond)missSet.add(monLabelEn(l.idx)); if(l.beyond)beyond=true;
+      return "<span dir='ltr'>"+monLabelEn(l.idx)+"</span>"+(l.beyond?"<span class='bynd'>بعد العقد</span>":(l.estimated?"<span class='estg'>تقديري</span>":"")); }).join(" · ");
+    const sameVal=b.lines.length>0 && b.lines.every(l=>!l.partial && Math.round(l.value)===Math.round(b.lines[0].value));
+    if(sameVal){
+      rows+="<tr><td><div class='per'>"+per(b.lines[0].from,b.lines[b.lines.length-1].to)+"</div><div class='mons'>"+tags+"</div></td>"+
+        "<td class='num'>"+fmt(b.lines[0].value)+"</td><td class='cnt'>"+b.count+"</td><td class='num'><b>"+fmt(b.monthsTotal)+"</b></td></tr>";
+    } else {
+      b.lines.forEach(l=>{
+        const price=l.partial?("<span style='color:#b45309'>"+fmt(l.due)+" − "+fmt(l.paid)+"</span>"):fmt(l.value);
+        const tg=l.beyond?"<span class='bynd'>بعد العقد</span>":(l.estimated?"<span class='estg'>تقديري</span>":"");
+        rows+="<tr><td><div class='per'>"+per(l.from,l.to)+"</div><div class='mons'><span dir='ltr'>"+monLabelEn(l.idx)+"</span>"+tg+"</div></td>"+
+          "<td class='num'>"+price+"</td><td class='cnt'>1</td><td class='num'><b>"+fmt(l.value)+"</b></td></tr>";
+      });
+    }
+    if(b.blocked) rows+="<tr><td colspan='4' class='warnrow'>⚠ شهر ناقص في نص الجدول: "+b.gapMonths.map(i=>monLabelEn(i)).join("، ")+" — يُراجع</td></tr>";
+  }
+  if(inc.total>0){
+    rows+="<tr class='incs'><td colspan='4'>⚠ فروق زيادة الإيجار — اتدفعت بالإيجار القديم "+fmt(inc.oldRent)+" بدل "+fmt(inc.newRent)+
+      (b.incIncluded?" <b>(مضمومة للتحويل)</b>":" <b>(مش مضمومة — للعلم)</b>")+"</td></tr>";
+    inc.months.forEach(i=>{ const g=u.grid[i];
+      rows+="<tr class='inc'><td><span dir='ltr'>"+monLabelEn(i)+"</span> <span class='mut'>— مدفوع "+fmt(g.paid||0)+" من "+fmt(g.due)+"</span></td>"+
+        "<td class='num'>"+fmt(g.due-(g.paid||0))+"</td><td class='cnt'>—</td><td class='num'>"+fmt(g.due-(g.paid||0))+"</td></tr>"; });
+  }
+  return {rows, total:b.total, monthsTotal:b.monthsTotal, inc, incIncluded:b.incIncluded, st, missSet, beyond,
+          rent: b.lines.length?b.lines[b.lines.length-1].due:null, u};
+}
 function ownerDocsHTML(owners){
-  const ds=a=>a?(String(a.d).padStart(2,"0")+"/"+String(a.m).padStart(2,"0")+"/"+a.y):"";
+  const ds=a=>a?(String(a.d).padStart(2,"0")+"/"+String(a.m).padStart(2,"0")+"/"+a.y):"—";
   const date=ds(todayYmd());
-  const per=(f,t)=>'من <span dir="ltr">'+ds(f)+'</span> إلى <span dir="ltr">'+ds(t)+'</span>';
-  let pages="", grand=0, grandUnits=0, ownersCount=0;
-  owners.forEach(o=>{
-    const N=ownerMonthsFor(o); const punits=ownerPayableUnits(o);
-    let total=0, unitCount=0, rows="", ownerEst=false, ownerBeyond=false; const missSet=new Set();
-    punits.forEach(u=>{
-      const b=unitMonthsBreakdown(u,N); if(!b.count)return; total+=b.total; unitCount++;
-      const beds=norm(u.beds)?" <span class='beds'>"+esc(u.beds)+" غرفة</span>":"";
-      const id="<div class='uid'>"+esc([u.project,(norm(u.block)+norm(u.bldg)),u.apt].filter(Boolean).join(" · "))+beds+"</div>";
-      if(b.equal){
-        rows+="<tr class='u'><td class='unm'>"+id+"<div class='perd'>"+per(b.lines[0].from,b.lines[b.lines.length-1].to)+"</div></td>"+
-          "<td class='num'>"+fmt(b.perMonth)+"</td><td class='cnt'>"+b.count+"</td><td class='num tot'>"+fmt(b.total)+"</td></tr>";
-      } else {
-        const lbl=b.hasPartial?"سداد جزئي":(b.hasEstimated?"يشمل شهور تقديرية":"قيم متغيّرة"); if(b.hasEstimated)ownerEst=true; if(b.hasBeyond)ownerBeyond=true;
-        rows+="<tr class='u'><td class='unm'>"+id+"<div class='psub muted'>"+lbl+"</div></td><td></td><td class='cnt'>"+b.count+"</td><td class='num tot'>"+fmt(b.total)+"</td></tr>";
-        b.lines.forEach(l=>{ if(l.estimated&&!l.beyond)missSet.add(monLabelEn(l.idx)); const price=l.partial?("<span dir='ltr' style='color:#b45309'>"+fmt(l.due)+" − "+fmt(l.paid)+"</span>"):fmt(l.value); const etag=l.beyond?" <span class='bynd'>بعد نهاية العقد</span>":(l.estimated?" <span class='estg'>تقديري</span>":"");
-          rows+="<tr class='sub'><td class='subm'><span dir='ltr'>"+monLabelEn(l.idx)+"</span>"+etag+"<div class='perd'>"+per(l.from,l.to)+"</div></td><td class='num'>"+price+"</td><td class='cnt'>1</td><td class='num'>"+fmt(l.value)+"</td></tr>"; });
-        if(b.blocked){ rows+="<tr class='sub'><td class='subm' colspan='4' style='color:#b91c1c;font-weight:700'>⚠ قيمة القسط ناقصة (صفر) في "+b.gapMonths.map(i=>monLabelEn(i)).join("، ")+" — يُراجع قبل السداد</td></tr>"; }
-      }
+  const r=state.report||{};
+  // وضع تجميع المستفيد: كل الملاك في بوكس واحد وإجمالي واحد
+  const groups=[];
+  if(r.benKey && owners.length && owners.every(o=>benKey(o)===r.benKey)){
+    groups.push({owners, ben:true});
+  } else owners.forEach(o=>groups.push({owners:[o], ben:false}));
+  let pages="", grand=0, grandUnits=0, secCount=0;
+  groups.forEach(G=>{
+    const o0=G.owners[0];
+    let rows="", total=0, units=[], incTot=0, incOut=0, missSet=new Set(), beyond=false;
+    G.owners.forEach(o=>{
+      const N=ownerMonthsFor(o);
+      ownerPayableUnits(o).forEach(u=>{
+        const blk=docUnitBlock(u,N,G.ben&&G.owners.length>1?o.name:"");
+        if(!blk) return;
+        rows+=blk.rows; total+=blk.total; units.push(blk);
+        if(blk.inc.total>0){ incTot+=blk.inc.total; if(!blk.incIncluded) incOut+=blk.inc.total; }
+        blk.missSet.forEach(x=>missSet.add(x)); if(blk.beyond)beyond=true;
+      });
     });
-    const instaPhone=isInsta(o)&&!norm(o.bank);
-    const bank=[((o.payMethods||[]).length?("الدفع: "+o.payMethods.join(" / ")):""), (norm(o.benName)?("المستفيد: "+o.benName):""), (instaPhone?("إنستاباي: "+egPhone(o.benAcc)):((norm(o.bank)?("بنك: "+o.bank+" · "):"")+(norm(o.benAcc)?("حساب: "+o.benAcc):""))), (norm(o.phone)?("ت: "+egPhone(o.phone)):"")].filter(Boolean).join(" — ");
-    grand+=total; grandUnits+=unitCount; ownersCount++;
-    pages+="<div class='sec osec'>"+
-      "<div class='sec-h'><span>"+esc(o.name)+" <span class='ocnt'>("+unitCount+" وحدة · "+N+" شهر/شقة)</span></span><span class='v'>"+fmt(total)+" ج.م</span></div>"+
-      (bank?"<div class='sec-sub'>"+esc(bank)+"</div>":"")+
-      "<table class='dt'><colgroup><col style='width:46%'><col style='width:20%'><col style='width:10%'><col style='width:24%'></colgroup>"+
-      "<thead><tr><th>الوحدة <span style='color:#a8a29e;font-weight:400'>(كمبوند · عمارة · شقة · غرف)</span></th><th class='num'>سعر الشهر</th><th class='cnt'>شهور</th><th class='num'>الإجمالي</th></tr></thead>"+
-      "<tbody>"+(rows||"<tr><td colspan='5' class='muted'>مفيش مستحقات حالية</td></tr>")+"</tbody>"+
-      (unitCount>1?"<tfoot><tr class='gt'><td colspan='3'>الإجمالي المطلوب تحويله للمالك ("+unitCount+" وحدة)</td><td class='num'>"+fmt(total)+"</td></tr></tfoot>":"")+"</table>"+
-      (ownerBeyond?"<div class='warnnote'>⚠ بعض الشهور تتعدّى نهاية عقد المالك — تأكّد من التجديد أو استمرار الإيجار قبل التحويل.</div>":"")+
-      (missSet.size?"<div class='missnote'>⚠ لا توجد مستحقات مسجّلة عن: "+[...missSet].join("، ")+" — قُدّرت بقيمة آخر إيجار شهري؛ يُرجى تسجيل المستحقات بالدفاتر.</div>":"")+
+    if(!units.length) return;
+    const instaPhone=isInsta(o0)&&!norm(o0.bank);
+    const bank=[((o0.payMethods||[]).length?("الدفع: <b>"+esc(o0.payMethods.join(" / "))+"</b>"):""),
+      (norm(o0.benName)?("المستفيد: <b>"+esc(o0.benName)+"</b>"):""),
+      (instaPhone?("إنستاباي: <b dir='ltr'>"+esc(egPhone(o0.benAcc))+"</b>"):((norm(o0.bank)?("بنك: <b>"+esc(o0.bank)+"</b> · "):"")+(norm(o0.benAcc)?("حساب: <b dir='ltr'>"+esc(o0.benAcc)+"</b>"):"")))
+    ].filter(Boolean).join(" — ");
+    // بوكس «مسدد حتى»: تاريخ واحد لو كله نفس التاريخ، وإلا كل وحدة بتاريخها
+    const stVals=units.map(x=>x.st?ds(x.st):"—");
+    const sameSt=stVals.every(v=>v===stVals[0]);
+    const stBox="<div class='bx'><div class='l'>مسدد حتى</div>"+(sameSt?
+      "<div class='v' dir='ltr'>"+stVals[0]+"</div>":
+      "<div class='vl'>"+units.map(x=>"<div><b>"+esc([x.u.project,(norm(x.u.block)+norm(x.u.bldg)),x.u.apt].filter(Boolean).join(" "))+"</b> — <bdi dir='ltr'>"+(x.st?ds(x.st):"—")+"</bdi></div>").join("")+"</div>")+"</div>";
+    const incUnit=units.filter(x=>x.inc.total>0);
+    const rentBox=(incUnit.length===1&&units.length===1)?"<div class='bx'><div class='l'>الإيجار الحالي</div><div class='v'>"+fmt(incUnit[0].inc.newRent)+" <span class='was'>(كان "+fmt(incUnit[0].inc.oldRent)+")</span></div></div>":"";
+    const incBox=incTot>0?"<div class='bx warn'><div class='l'>⚠ فروق زيادة غير مسددة</div><div class='v'>"+fmt(incTot)+"</div>"+
+      (incOut>0?"<div class='bxn'>"+(incOut===incTot?"مش مضمومة للتحويل":"منها "+fmt(incOut)+" مش مضمومة")+"</div>":"<div class='bxn'>مضمومة للتحويل</div>")+"</div>":"";
+    const title=G.ben?(esc(norm(o0.benName)||o0.name)+" <span class='ocnt'>(مستفيد واحد · "+G.owners.length+" مالك · "+units.length+" وحدة)</span>")
+                     :(esc(o0.name)+" <span class='ocnt'>("+units.length+" وحدة)</span>");
+    grand+=total; grandUnits+=units.length; secCount++;
+    pages+="<div class='own'>"+
+      "<div class='oh'><div class='on'>"+title+"</div><div class='ot'>"+fmt(total)+" ج.م</div></div>"+
+      (bank?"<div class='bank'>"+bank+"</div>":"")+
+      "<div class='boxes'>"+stBox+rentBox+incBox+"</div>"+
+      "<table class='dt'><colgroup><col style='width:50%'><col style='width:18%'><col style='width:9%'><col style='width:23%'></colgroup>"+
+      "<thead><tr><th>الوحدة / المدة</th><th class='num'>سعر الشهر</th><th class='cnt'>شهور</th><th class='num'>الإجمالي</th></tr></thead><tbody>"+rows+
+      "<tr class='gr'><td colspan='3'>إجمالي التحويل"+(G.ben?" للمستفيد":"")+(incOut>0?" <span style='font-weight:400;font-size:10px'>(من غير فروق الزيادة الغير مضمومة)</span>":"")+"</td><td class='num'>"+fmt(total)+"</td></tr>"+
+      "</tbody></table>"+
+      (beyond?"<div class='warnnote'>⚠ بعض الشهور تتعدّى نهاية عقد المالك — تأكّد من التجديد قبل التحويل.</div>":"")+
+      (missSet.size?"<div class='missnote'>الشهور المعلّمة «تقديري» ("+[...missSet].join("، ")+") مش مسجّلة في الدفاتر — محسوبة بآخر إيجار.</div>":"")+
     "</div>";
   });
-  const top=(ownersCount>1)?("<div class='gtop'><span>أوامر تحويل · "+ownersCount+" مالك · "+grandUnits+" وحدة</span><span class='v'>"+fmt(grand)+" ج.م</span></div>"):"";
-  return "<!doctype html><html dir='rtl' lang='ar'><head><meta charset='utf-8'><title>أوامر التحويل</title><link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700;800&display=swap' rel='stylesheet'><style>"+PRINT_CSS+DOC_EXTRA+"</style></head><body><div class='page'>"+
+  const top=(secCount>1)?("<div class='gtop'><span>أوامر تحويل · "+secCount+" تحويل · "+grandUnits+" وحدة</span><span class='v'>"+fmt(grand)+" ج.م</span></div>"):"";
+  return "<!doctype html><html dir='rtl' lang='ar'><head><meta charset='utf-8'><title>أوامر التحويل</title><style>"+PRINT_CSS+DOC_EXTRA+DOC_V2+"</style></head><body><div class='page'>"+
     "<div class='rh'><div><div class='rh-co'>أصول ريزيدنس</div><div class='rh-en'>OSOOL RESIDENCE</div></div><div><div class='rh-title'>أوامر تحويل الملاك</div><div class='rh-meta'>طُبع "+date+"</div></div></div>"+
     top+pages+
     "<div class='rf'><span>أصول ريزيدنس — أوامر تحويل الملاك</span><span>"+date+"</span></div>"+
   "</div></body></html>";
 }
-
-
+const RPT_BOX=".rbx{display:flex;gap:8px;padding:7px 10px;border-bottom:1px solid #e7e5e4}.rb{flex:1;border:1.5px solid #1c1917;border-radius:6px;padding:5px 8px}.rb .rl{font-size:8.5px;color:#57534e}.rb .rv{font-size:13px;font-weight:800;font-variant-numeric:tabular-nums}.rb .rvl{font-size:9.5px;line-height:1.7}.rb.rw{border-color:#b45309;background:#fffbeb}.rb.rw .rv{color:#92400e}";
+const DOC_V2=".own{border:1px solid #d6d3d1;border-radius:9px;overflow:hidden;page-break-inside:avoid;margin-bottom:14px}"+
+ ".oh{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:#fafaf9;border-bottom:1px solid #e7e5e4}"+
+ ".on{font-size:14px;font-weight:800}.ot{font-size:16px;font-weight:800;font-variant-numeric:tabular-nums}"+
+ ".bank{font-size:10.5px;color:#44403c;padding:6px 12px;border-bottom:1px solid #e7e5e4;line-height:1.7}"+
+ ".boxes{display:flex;gap:8px;padding:9px 12px;border-bottom:1px solid #e7e5e4}"+
+ ".bx{flex:1;border:1.5px solid #1c1917;border-radius:7px;padding:6px 9px}.bx .l{font-size:9px;color:#57534e;margin-bottom:1px}"+
+ ".bx .v{font-size:15px;font-weight:800;font-variant-numeric:tabular-nums}.bx .vl{font-size:10.5px;line-height:1.8}"+
+ ".bx .was{font-size:10px;font-weight:400;color:#78716c}.bx .bxn{font-size:9px;color:#92400e;margin-top:1px}"+
+ ".bx.warn{border-color:#b45309;background:#fffbeb}.bx.warn .v{color:#92400e}"+
+ ".dt .uh td{background:#fafaf9;font-weight:800;font-size:11.5px;border-top:1.5px solid #e7e5e4}.uhs{font-weight:400;font-size:9.5px;color:#78716c}"+
+ ".dt .per{display:inline-block;background:#f5f5f4;border:1px solid #e7e5e4;border-radius:5px;padding:1px 6px;font-weight:700;font-size:11px}"+
+ ".dt .mons{font-size:9px;color:#78716c;margin-top:2px}.estg{font-size:8px;color:#b45309;border:1px solid #fcd34d;background:#fffbeb;border-radius:3px;padding:0 3px;margin-right:3px}"+
+ ".bynd{font-size:8px;color:#b91c1c;border:1px solid #fecaca;background:#fef2f2;border-radius:3px;padding:0 3px;margin-right:3px}"+
+ ".dt .incs td{background:#fffbeb;color:#92400e;font-weight:700;font-size:10px;border-top:1.5px solid #fcd34d}"+
+ ".dt .inc td{background:#fffdf5}.mut{font-size:9.5px;color:#78716c}.warnrow{color:#b91c1c;font-weight:700;font-size:10px}"+
+ ".dt .gr td{background:#1c1917;color:#fff;font-weight:800;font-size:12.5px}";
 
 function printOwnerDocs(owners){ owners=(owners||[]).filter(Boolean); if(!owners.length){alert("مفيش مالك عليه مستحقات للطباعة.");return;} const w=window.open("","_blank"); if(!w){alert("اسمح بالنوافذ المنبثقة عشان الطباعة تشتغل.");return;} w.document.write(ownerDocsHTML(owners)); w.document.close(); w.focus(); setTimeout(function(){try{w.print();}catch(e){}},500); }
 // on-screen transfer document inside the owner page
@@ -2476,7 +2646,16 @@ function printReport(){
     const instaPhone=isInsta(g.o)&&!norm(g.o.bank);
     const bank=[((g.o.payMethods||[]).length?("الدفع: "+g.o.payMethods.join(" / ")):""), (g.o.benName?("المستفيد: "+g.o.benName):""), (instaPhone?("إنستاباي: "+egPhone(g.o.benAcc)):((g.o.bank?("بنك: "+g.o.bank+" · "):"")+(g.o.benAcc?("حساب: "+g.o.benAcc):"")))].filter(Boolean).join(" — ");
     const seq=data.indexOf(g)+1;
-    body+="<div class='sec' id='own"+seq+"'><div class='sec-h'><span><a href='#summary' class='seqb' title='رجوع للكشف المختصر'>"+seq+"</a> "+esc(g.o.name)+"</span><span class='v'>"+fmt(g.subtotal)+" ج.م</span></div>"+(bank?"<div class='sec-sub'>"+esc(bank)+"</div>":"")+
+    const gUnits=[]; g.rows.forEach(x=>{ if(gUnits.indexOf(x.u)<0) gUnits.push(x.u); });
+    const stV=gUnits.map(u=>{ const st=settledOf(u); return {u,t:st?ds(st):"—"}; });
+    const sameSt=stV.every(v=>v.t===stV[0].t);
+    let incT=0; const incLines=[];
+    gUnits.forEach(u=>{ const ic=increaseDiff(u); if(ic.total>0){ incT+=ic.total;
+      incLines.push(esc([(norm(u.block)+norm(u.bldg)),u.apt].filter(Boolean).join(" "))+": "+ic.months.map(i=>monLabelEn(i)).join("، ")+" = "+fmt(ic.total)+(u.incInclude?" (مضمومة)":" (مش مضمومة)")); } });
+    const boxes="<div class='rbx'><div class='rb'><div class='rl'>مسدد حتى</div>"+(sameSt?"<div class='rv' dir='ltr'>"+stV[0].t+"</div>":
+      "<div class='rvl'>"+stV.map(v=>"<div><b>"+esc([(norm(v.u.block)+norm(v.u.bldg)),v.u.apt].filter(Boolean).join(" "))+"</b> — <bdi dir='ltr'>"+v.t+"</bdi></div>").join("")+"</div>")+"</div>"+
+      (incT>0?"<div class='rb rw'><div class='rl'>⚠ فروق زيادة غير مسددة</div><div class='rv'>"+fmt(incT)+"</div><div class='rvl'>"+incLines.join("<br>")+"</div></div>":"")+"</div>";
+    body+="<div class='sec' id='own"+seq+"'><div class='sec-h'><span><a href='#summary' class='seqb' title='رجوع للكشف المختصر'>"+seq+"</a> "+esc(g.o.name)+"</span><span class='v'>"+fmt(g.subtotal)+" ج.م</span></div>"+(bank?"<div class='sec-sub'>"+esc(bank)+"</div>":"")+boxes+
       "<table style='table-layout:fixed'><colgroup><col style='width:13%'><col style='width:37%'><col style='width:17%'><col style='width:8%'><col style='width:25%'></colgroup>"+
       "<thead><tr><th>الاستحقاق</th><th>الوحدة</th><th class='num'>سعر الشهر</th><th style='text-align:center'>شهور</th><th class='num'>الإجمالي</th></tr></thead><tbody>"+rws+"</tbody></table></div>";
   });
@@ -2827,7 +3006,7 @@ function handleClick(e){
   const t=e.target.closest("[data-act]"); if(!t)return;
   const act=t.dataset.act;
   // وضع الاطّلاع فقط: امنع أي إجراء بيغيّر البيانات (لازم يكون أول حاجة)
-  if(state.readOnly && ["edSave","oEdSave","recordPay","bulkConfirm","doClear","applyReplace","applyUpdate","revAccept","revKeep","revAcceptAll","revKeepAll","revFixSettled","editUnit","editOwner","upload","restoreAuto","askClear","toggleCollect","delPay","ownInc","ownDec","setTagMode","quickPay","qpConfirm","qpAll","fixGaps","stuckDelAll"].indexOf(act)>-1){
+  if(state.readOnly && ["edSave","oEdSave","recordPay","bulkConfirm","doClear","applyReplace","applyUpdate","revAccept","revKeep","revAcceptAll","revKeepAll","revFixSettled","editUnit","editOwner","upload","restoreAuto","askClear","toggleCollect","delPay","ownInc","ownDec","setTagMode","quickPay","qpConfirm","qpAll","fixGaps","stuckDelAll","incIgnore","incRestore"].indexOf(act)>-1){
     state.flash="وضع الاطّلاع فقط — سجّل دخول عشان تعدّل."; render(); return;
   }
   if(act==="upload"){document.getElementById("fileInput").click();}
@@ -3022,6 +3201,13 @@ function handleClick(e){
     let n=0; list.forEach(x=>{ removePayment(x.u, x.p.id); n++; });
     computeAll(); markChange(n); save(); state.flash="اتمسحت "+n+" دفعة ملهاش أثر ✓"; render(); }
   else if(act==="openReview"){ syncMainFromDOM(); state.view="review"; window.scrollTo(0,0); render(); }
+  else if(act==="incIgnore"){ const f=findUnit(t.dataset.code); if(!f)return;
+    if(!window.confirm("تجاهل الزيادة على الوحدة دي؟\n\nالفروق القديمة هتتشال، والشهور الجاية هتتحسب بالإيجار القديم لحد ما ترجّعها.")) return;
+    f.u.increaseIgnored=true; f.u.incInclude=false; f.u.edited=true; computeAll(); markChange(1); save();
+    state.flash="اتجاهلت الزيادة — الحساب بالإيجار القديم ✓"; render(); }
+  else if(act==="incRestore"){ const f=findUnit(t.dataset.code); if(!f)return;
+    f.u.increaseIgnored=false; f.u.edited=true; computeAll(); markChange(1); save();
+    state.flash="رجعت الزيادة ✓"; render(); }
   else if(act==="payIgnoreGap"){ const f=findUnit(t.dataset.code); if(!f)return; const u=f.u;
     let block=[]; try{ block=JSON.parse(t.dataset.block||"[]"); }catch(e){}
     block.forEach(idx=>setIgnoredIdx(u,idx,true));
@@ -3128,6 +3314,11 @@ app.addEventListener("input",function(e){
 });
 app.addEventListener("change",function(e){
   const el=e.target;
+  if(el.classList&&el.classList.contains("inc-inc")){ const f=findUnit(el.dataset.code); if(f){
+      if(state.quickPay) qpSync();
+      f.u.incInclude=!!el.checked; f.u.edited=true; computeAll(); save();
+      const q=state.quickPay; if(q && q.code===f.u.code) q.amount=Math.round(dueAmount(f.u,q.months));
+      render(); } return; }
   if(el.classList&&el.classList.contains("pay-check")){const row=el.closest(".pay-row");if(row){row.classList.toggle("bg-emerald-50/60",el.checked);const m=ensureMain();const r=m.rows[row.dataset.key]=m.rows[row.dataset.key]||{};r.checked=el.checked;const am=row.querySelector(".pay-amt");if(am)r.amount=parseFloat(am.value.replace(/[^\d.]/g,""))||0;if(row.dataset.owner)r.owner=row.dataset.owner;}mainTotals();}
   else if(el.id==="ed-auto"){ syncDraftFromDOM(); render(); }
   else if(el.id==="bankSel"){ syncMainFromDOM(); const v=el.value;
