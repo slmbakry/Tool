@@ -199,7 +199,24 @@ function toYmd(v){
 /* anchor + period helpers */
 function anchorOf(endYmd){if(!endYmd)return null;const s=addDaysYmd(snapMonthEnd(endYmd),1);return {day:s.d,month:s.m};}
 // أنكور الوحدة: لو المستخدم اعتمد التصحيح من «مسدد حتى» بيتستخدم، وإلا الافتراضي من نهاية العقد
-function unitAnchor(u){ if(u&&u.anchorOverride&&u.anchorOverride.day) return {day:u.anchorOverride.day,month:u.anchorOverride.month||1}; return anchorOf(u?u.contractEnd:null); }
+function unitAnchor(u){ if(u&&u.anchorOverride&&u.anchorOverride.day) return {day:u.anchorOverride.day,month:u.anchorOverride.month||1}; if(calAligned(u)) return {day:1,month:1}; return anchorOf(u?u.contractEnd:null); }
+// محاذاة تلقائية للشهر الميلادي: «مسدد حتى» آخر الشهر ونهاية العقد في نصه (اتدفع نص شهر في الأول عشان الإيجار يمشي مع الميلادي)
+function calAligned(u){
+  if(!u||u.anchorOverride||u.settledFixed||!u.settled||!u.contractEnd) return false;
+  if(!isMonthEnd(u.settled)) return false;
+  const a=anchorOf(u.contractEnd); return !!(a && a.day!==1);
+}
+// الشهور اللي «مسدد حتى» مغطّيها في الوحدة المحاذاة — تتعامل كمسددة حتى لو الجدول فيه نص شهر
+function coveredBySettled(u,idx){
+  if(!calAligned(u)) return false; const {y,m}=idxToYM(idx);
+  return ymdToUTC({y,m,d:new Date(Date.UTC(y,m,0)).getUTCDate()})<=ymdToUTC(u.settled);
+}
+function periodEndU(u,anchor,idx){ return lastMonthFactor(u,idx)<1?u.contractEnd:addDaysYmd(periodStart(anchor,idx+1),-1); }
+// آخر شهر في العقد المحاذى = جزء من شهر (مثلاً 1–14 فبراير): نسبة الأيام، وإلا 1
+function lastMonthFactor(u,idx){
+  if(!calAligned(u)) return 1; const ce=u.contractEnd; if(idx!==ce.y*12+ce.m-1) return 1;
+  const dim=new Date(Date.UTC(ce.y,ce.m,0)).getUTCDate(); return ce.d>=dim?1:ce.d/dim;
+}
 // الأنكور المقترح من «مسدد حتى تاريخ» (اليوم اللي بعده = بداية الدورة)
 function anchorFromSettled(u){ if(!u||!u.settled)return null; const s=addDaysYmd(snapMonthEnd(u.settled),1); return {day:s.d,month:s.m}; }
 // وحدات فيها تعارض بين الدورة المستنتجة من نهاية العقد ودورة «مسدد حتى»
@@ -287,8 +304,9 @@ function isIncreaseIdx(u,idx){
 // الإيجار الفعّال للشهر: لو الزيادة متجاهلة على الوحدة، أي شهر أعلى من القديم يتحسب بالقديم
 function effDue(u,idx){
   const g=u.grid[idx]; if(!g) return 0;
-  if(u.increaseIgnored){ const o=u._oldRent!=null?u._oldRent:(u._oldRent=oldRentOf(u)); if(o && g.due>o) return o; }
-  return g.due;
+  let d=g.due;
+  if(u.increaseIgnored){ const o=u._oldRent!=null?u._oldRent:(u._oldRent=oldRentOf(u)); if(o && d>o) d=o; }
+  const f=lastMonthFactor(u,idx); return f<1?Math.round(d*f):d;
 }
 function effRem(u,idx){ const g=u.grid[idx]; if(!g) return 0; return Math.max(0,effDue(u,idx)-(g.paid||0)); }
 // فروق الزيادة المعلّقة على الوحدة (لو الزيادة مش متجاهلة)
@@ -303,7 +321,7 @@ function increaseDiff(u){
 }
 // هل الشهر يدخل في عدّ الشهور العادية؟ (فروق الزيادة لأ — ليها بند منفصل)
 function isMonthSkip(u,idx){ return isIgnoredIdx(u,idx) || (!u.increaseIgnored && isIncreaseIdx(u,idx)); }
-function isIgnoredIdx(u,idx){ return !!(u.ignoredIdx && u.ignoredIdx[idx]); }
+function isIgnoredIdx(u,idx){ return !!(u.ignoredIdx && u.ignoredIdx[idx]) || coveredBySettled(u,idx); }
 function setIgnoredIdx(u,idx,val){
   if(!u.ignoredIdx) u.ignoredIdx={};
   if(val) u.ignoredIdx[idx]=true; else delete u.ignoredIdx[idx];
@@ -404,7 +422,7 @@ function blindUnits(){
 }
 function anchorReviews(){ const out=[];
   state.owners.forEach(o=>o.units.forEach(u=>{ if(!unitVisible(u))return;
-    if(u.anchorOverride||u.settledFixed)return;
+    if(u.anchorOverride||u.settledFixed||calAligned(u))return;
     const cur=anchorOf(u.contractEnd), sug=anchorFromSettled(u);
     if(!cur||!sug)return; if(cur.day===sug.day)return;
     if(settledLooksShifted(u)){
@@ -537,6 +555,7 @@ function computeUnit(u){
   // anchor / renewal
   const anchor=unitAnchor(u);
   c.anchor=anchor;
+  c.renewAnchor=anchorOf(u.contractEnd)||anchor;   // التجديد بيفضل على دورة العقد حتى لو الوحدة محاذاة للميلادي
   if(!u.contractEnd) c.alerts.push({lv:"amber",t:"نهاية العقد ناقصة أو غير مقروءة — مش هينفع نحسب التجديد أو الاستحقاق."});
   if(!u.settled) c.alerts.push({lv:"amber",t:"«مسدد حتى تاريخ» ناقص."});
 
@@ -548,7 +567,8 @@ function computeUnit(u){
 
   // next due = first month with due>0 and rem>0
   let nextIdx=null;
-  for(const m of c.months){ if(m.due>0 && m.rem>0.0001){ nextIdx=m.idx; break; } }
+  u._oldRent=undefined;
+  for(const m of c.months){ if(m.due>0 && !isMonthSkip(u,m.idx) && effRem(u,m.idx)>0.0001){ nextIdx=m.idx; break; } }
   c.nextIdx=nextIdx;
   if(nextIdx!=null && anchor){
     const ps=periodStart(anchor,nextIdx);
@@ -562,7 +582,8 @@ function computeUnit(u){
     let cur=nextIdx;
     while(taken<u.payEvery){
       const g=u.grid[cur];
-      if(g && g.due>0){ amount+=Math.max(0,g.due-g.paid); vals.push(g.due); toIdx=cur; taken++; cur++; }
+      if(g && g.due>0 && isMonthSkip(u,cur)){ cur++; }
+      else if(g && g.due>0){ amount+=effRem(u,cur); vals.push(effDue(u,cur)); toIdx=cur; taken++; cur++; }
       else if(g && g.due===0){ cur++; }            // skip empty gaps
       else break;                                   // no more grid
     }
@@ -592,7 +613,7 @@ function computeUnit(u){
     const dueAt={}; c.months.forEach(m=>{dueAt[m.idx]=m.due;});
     const minY=idxToYM(months[0]).y-1, maxY=idxToYM(months[months.length-1]).y+1;
     const renewalCols={};
-    for(let Y=minY;Y<=maxY;Y++){ renewalCols[renewalCol(anchor,Y)]=true; }
+    for(let Y=minY;Y<=maxY;Y++){ renewalCols[renewalCol(c.renewAnchor,Y)]=true; }
     // consecutive changes
     for(let k=1;k<c.months.length;k++){
       const cur=c.months[k], prev=c.months[k-1];
@@ -665,7 +686,7 @@ function unitMonthsBreakdown(u,n){
     }
   }
   const blocked=gapMonths.length>0;
-  const lines=take.map(idx=>{const g=u.grid[idx];const paid=g.paid||0;const d=effDue(u,idx);return {idx,from:periodStart(anchor,idx),to:addDaysYmd(periodStart(anchor,idx+1),-1),due:d,paid,value:Math.max(0,d-paid),partial:paid>0.0001};});
+  const lines=take.map(idx=>{const g=u.grid[idx];const paid=g.paid||0;const d=effDue(u,idx);return {idx,from:periodStart(anchor,idx),to:periodEndU(u,anchor,idx),due:d,paid,value:Math.max(0,d-paid),partial:paid>0.0001};});
   if(lines.length<N && !blocked){
     // التقدير بآخر إيجار فعّال (لو الزيادة متجاهلة = الإيجار القديم)
     const rentGuess=lastReal!=null?effDue(u,lastReal):0;
@@ -676,12 +697,12 @@ function unitMonthsBreakdown(u,n){
       if(u.grid[lastIdx] && u.grid[lastIdx].due>0){
         if(isMonthSkip(u,lastIdx)) continue;
         const g=u.grid[lastIdx], paid=g.paid||0, d=effDue(u,lastIdx);
-        if((d-paid)>0.0001) lines.push({idx:lastIdx,from:periodStart(anchor,lastIdx),to:addDaysYmd(periodStart(anchor,lastIdx+1),-1),due:d,paid,value:d-paid,partial:paid>0.0001});
+        if((d-paid)>0.0001) lines.push({idx:lastIdx,from:periodStart(anchor,lastIdx),to:periodEndU(u,anchor,lastIdx),due:d,paid,value:d-paid,partial:paid>0.0001});
         continue;
       }
       const from=periodStart(anchor,lastIdx);
       const beyond=u.contractEnd?(ymdToUTC(from)>ymdToUTC(u.contractEnd)):false;
-      lines.push({idx:lastIdx,from,to:addDaysYmd(periodStart(anchor,lastIdx+1),-1),due:rentGuess,paid:0,value:rentGuess,partial:false,estimated:true,beyond});
+      const rg=Math.round(rentGuess*lastMonthFactor(u,lastIdx)); lines.push({idx:lastIdx,from,to:periodEndU(u,anchor,lastIdx),due:rg,paid:0,value:rg,partial:false,estimated:true,beyond});
     }
   }
   // فروق الزيادة — بند منفصل؛ بتدخل الإجمالي بس لو الخانة متعلّمة على الوحدة
@@ -732,7 +753,8 @@ function recomputeSettled(u){
   const anchor=unitAnchor(u); if(!anchor) return;
   const idxs=Object.keys(u.grid).map(Number).sort((a,b)=>a-b);
   let nextIdx=null;
-  for(const idx of idxs){const g=u.grid[idx];if(g.due>0&&(g.due-g.paid)>0.0001){nextIdx=idx;break;}}
+  u._oldRent=undefined;
+  for(const idx of idxs){const g=u.grid[idx];if(g.due>0&&!isMonthSkip(u,idx)&&effRem(u,idx)>0.0001){nextIdx=idx;break;}}
   let boundary;
   if(nextIdx!=null) boundary=nextIdx;
   else { let last=null; for(const idx of idxs) if(u.grid[idx].due>0) last=idx; if(last==null) return; boundary=last+1; }
@@ -773,7 +795,7 @@ function recordPayment(u,amount,dateYmd,source,note){
     let lastIdx=dueMonths.length?dueMonths[dueMonths.length-1]:(sorted.length?sorted[sorted.length-1]:null);
     let guard=0;
     while(remaining>0.0001 && rentGuess>0 && lastIdx!=null && guard++<120){
-      lastIdx+=1; const pay=Math.min(rentGuess,remaining);
+      lastIdx+=1; const pay=Math.min(Math.round(rentGuess*lastMonthFactor(u,lastIdx)),remaining);
       const cur=u.grid[lastIdx];
       if(cur && cur.due>0){                       // صف موجود بقسط حقيقي: كمّل عليه
         if(isMonthSkip(u,lastIdx)) continue;
@@ -1562,9 +1584,15 @@ function payRow(x,m){
         '<span class="text-base font-extrabold tnum">'+fmt(p.amount)+'</span>'+
         '<button data-act="quickPay" data-code="'+esc(u.code)+'" data-amt="'+Math.round(p.amount+((u.incInclude&&!u.increaseIgnored)?increaseDiff(u).total:0))+'" data-months="'+(p.months||1)+'" class="inline-flex items-center gap-1 rounded-xl bg-stone-900 text-white px-3 py-1.5 text-[11px] font-bold active:scale-[0.97]">'+icon("banknote",12)+' سداد</button>'+
       '</span>'+
-    '</div>'+increaseAlertHTML(u)+'</div>';
+    '</div>'+calNoteHTML(u)+increaseAlertHTML(u)+'</div>';
 }
 // ===== تنبيه فرق الزيادة على الوحدة (خانة ضم + زر تجاهل) =====
+function calNoteHTML(u){
+  if(!calAligned(u)) return "";
+  const ce=u.contractEnd, dim=new Date(Date.UTC(ce.y,ce.m,0)).getUTCDate();
+  const tail=ce.d<dim?(" · آخر شهر من 01 لـ "+String(ce.d).padStart(2,"0")+"/"+String(ce.m).padStart(2,"0")+"/"+ce.y+" (جزء من شهر)"):"";
+  return '<div class="mt-1.5 text-[10.5px] text-stone-500">ملحوظة: الوحدة ماشية على الشهر الميلادي (مسدد حتى <bdi dir="ltr">'+fmtDate(u.settled)+'</bdi>)'+tail+'</div>';
+}
 function increaseAlertHTML(u){
   if(u.increaseIgnored){
     return '<div class="mt-2 rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-1.5 flex items-center justify-between gap-2">'+
@@ -1739,7 +1767,7 @@ function viewOwnerDetail(){
           '<span class="text-sm font-bold tnum">'+fmt(amt)+'</span>'+
           '<button data-act="quickPay" data-code="'+esc(u.code)+'" data-amt="'+amt+'" data-months="'+nMonths+'" class="inline-flex items-center gap-1 rounded-xl bg-stone-900 text-white px-3 py-1.5 text-[11px] font-bold">'+icon("banknote",12)+' سداد</button>'+
         '</span></div>':"")+
-      increaseAlertHTML(u)+
+      calNoteHTML(u)+increaseAlertHTML(u)+
       '</div>';
   }).join("");
   const payAllBtn=(units.length>1&&ownerTotal>0)?'<button data-act="qpAll" class="w-full mt-2 inline-flex items-center justify-center gap-2 rounded-2xl border-2 border-stone-900 bg-white py-2.5 text-[12px] font-bold text-stone-900">'+icon("banknote",14)+' سدّد كل وحدات المالك · '+fmt(ownerTotal)+'</button>':"";
@@ -2076,7 +2104,7 @@ function viewUnit(){
       infoCell("نهاية العقد",fmtDate(u.contractEnd))+
       infoCell("مسدد حتى",fmtDate(u.settled))+
       infoCell("آخر سداد",fmtDate(u.lastPay))+
-    '</div>'+
+    '</div>'+calNoteHTML(u)+
     (sug?'<div class="mt-3 rounded-2xl bg-stone-900 text-white p-3.5">'+
       '<div class="flex items-center justify-between"><span class="text-xs text-stone-300">السداد القادم (مقترح: '+sug.months+' شهر)</span>'+
         '<span class="text-[11px] text-stone-300">'+dueDateStr+'</span></div>'+
@@ -2095,7 +2123,7 @@ function viewUnit(){
     const rem=m.rem; const remCls=rem>0.0001?"text-red-600 font-semibold":(m.due>0?"text-emerald-600":"text-stone-300");
     const isPaid=m.due>0&&rem<=0.0001; const isSettled=settledIdx!=null&&m.idx<=settledIdx;
     const isNext=m.idx===c.nextIdx;
-    const isRenewal=c.anchor && (function(){const Y=idxToYM(m.idx).y;return renewalCol(c.anchor,Y)===m.idx||renewalCol(c.anchor,Y-1)===m.idx;})();
+    const isRenewal=c.renewAnchor && (function(){const Y=idxToYM(m.idx).y;return renewalCol(c.renewAnchor,Y)===m.idx||renewalCol(c.renewAnchor,Y-1)===m.idx;})();
     return '<tr class="'+(isNext?"bg-amber-50":"")+'">'+
       '<td class="px-2 py-1.5 text-xs '+(isSettled?"text-stone-400":"text-stone-700")+'">'+monLabel(m.idx)+(isRenewal?' <span class="text-[9px] text-violet-500">تجديد</span>':"")+'</td>'+
       '<td class="px-2 py-1.5 text-xs tnum text-left">'+ (m.due?fmt(m.due):'—') +'</td>'+
@@ -2263,7 +2291,7 @@ function unitDuePayments(u){
     const amount=group.reduce((s,idx)=>s+effRem(u,idx),0);
     const gross=group.reduce((s,idx)=>s+effDue(u,idx),0);
     const paidSum=group.reduce((s,idx)=>s+(u.grid[idx].paid||0),0);
-    out.push({dueDate:periodStart(anchor,firstIdx),months:group.length,amount,gross,paid:paidSum,partial:paidSum>0.0001,estimated:false,beyond:false,from:periodStart(anchor,firstIdx),to:addDaysYmd(periodStart(anchor,lastG+1),-1),firstIdx,lastIdx:lastG,idxs:group.slice()});
+    out.push({dueDate:periodStart(anchor,firstIdx),months:group.length,amount,gross,paid:paidSum,partial:paidSum>0.0001,estimated:false,beyond:false,from:periodStart(anchor,firstIdx),to:periodEndU(u,anchor,lastG),firstIdx,lastIdx:lastG,idxs:group.slice()});
     i+=ev;
   }
   // forward visibility: if the next un-recorded period becomes due within the alert horizon, surface it
@@ -2284,9 +2312,9 @@ function unitDuePayments(u){
         }
         if(!group.length)break;
         const firstIdx=group[0], lastG=group[group.length-1];
-        const amount=group.length*rentGuess;
+        const amount=group.reduce((s,idx)=>s+Math.round(rentGuess*lastMonthFactor(u,idx)),0);
         const beyond=u.contractEnd?(ymdToUTC(periodStart(anchor,firstIdx))>ymdToUTC(u.contractEnd)):false;
-        out.push({dueDate:periodStart(anchor,firstIdx),months:group.length,amount,gross:amount,paid:0,partial:false,estimated:true,beyond,from:periodStart(anchor,firstIdx),to:addDaysYmd(periodStart(anchor,lastG+1),-1),firstIdx,lastIdx:lastG,estRate:rentGuess});
+        out.push({dueDate:periodStart(anchor,firstIdx),months:group.length,amount,gross:amount,paid:0,partial:false,estimated:true,beyond,from:periodStart(anchor,firstIdx),to:periodEndU(u,anchor,lastG),firstIdx,lastIdx:lastG,estRate:rentGuess});
         cur=lastG;
       }
     }
@@ -2674,7 +2702,7 @@ function printReport(){
       // بنود الشهور: كل شهر بقيمته المتبقية (الجزئي منفصل بملحوظة)
       if(x.p.idxs) x.p.idxs.forEach(i=>{ const rem=effRem(u,i), due=effDue(u,i), pd=u.grid[i].paid||0;
         e.items.push({v:rem, part:pd>0.0001, paid:pd, due}); });
-      else for(let q=0;q<x.p.months;q++) e.items.push({v:x.p.estRate!=null?x.p.estRate:(x.p.amount/x.p.months), part:false});
+      else for(let q=0;q<x.p.months;q++){ const qi=x.p.firstIdx+q; e.items.push({v:x.p.estRate!=null?Math.round(x.p.estRate*lastMonthFactor(u,qi)):(x.p.amount/x.p.months), part:false}); }
       if(ymdToUTC(x.p.dueDate)<ymdToUTC(e.due)) e.due=x.p.dueDate; });
     const lines=order.map(k=>byUnit[k]).sort((a,c)=>ymdToUTC(a.due)-ymdToUTC(c.due));
     // تجميع القيم المتتالية المتساوية: 77,000 × 3 — والجزئي سطر لوحده بملحوظة
