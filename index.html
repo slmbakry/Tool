@@ -2450,15 +2450,18 @@ function unitDuePayments(u){
   }
   return out;
 }
+// ترتيب بكود الوحدة عند التساوي (أرقام بترتيبها الطبيعي: 2 قبل 10)
+function codeCmp(a,b){ return String(a||"").localeCompare(String(b||""),"en",{numeric:true}); }
+function minCode(rows){ let m=null; rows.forEach(x=>{ if(m===null||codeCmp(x.u.code,m)<0) m=x.u.code; }); return m; }
 function buildReport(){
   const r=state.report||{}; const res=[];
   state.owners.forEach(o=>{
     if(r.benKey && benKey(o)!==r.benKey) return;   // عزل مجموعة المستفيد يشمل الطباعة والتصدير
     const rows=[];
     o.units.forEach(u=>{ if(!unitVisible(u)||unitExcluded(u))return; unitDuePayments(u).forEach(p=>{ if(inRange(p.dueDate,r.from,r.to)) rows.push({u,p}); }); });
-    if(rows.length){ rows.sort((a,b)=>ymdToUTC(a.p.dueDate)-ymdToUTC(b.p.dueDate)); res.push({o,rows,subtotal:rows.reduce((s,x)=>s+x.p.amount,0),earliest:rows[0].p.dueDate}); }
+    if(rows.length){ rows.sort((a,b)=>ymdToUTC(a.p.dueDate)-ymdToUTC(b.p.dueDate)||codeCmp(a.u.code,b.u.code)); res.push({o,rows,minCode:minCode(rows),subtotal:rows.reduce((s,x)=>s+x.p.amount,0),earliest:rows[0].p.dueDate}); }
   });
-  res.sort((a,b)=>ymdToUTC(a.earliest)-ymdToUTC(b.earliest));
+  res.sort((a,b)=>ymdToUTC(a.earliest)-ymdToUTC(b.earliest)||codeCmp(a.minCode,b.minCode));
   return res;
 }
 function applyPreset(id){
@@ -2828,21 +2831,21 @@ function printReport(){
   // ترتيب الكشف المختصر بأقرب ميعاد استحقاق
   const sumData=data.slice().sort((a,c)=>{
     const av=a.earliest?ymdToUTC(a.earliest):Infinity, cv=c.earliest?ymdToUTC(c.earliest):Infinity;
-    return av-cv || String(a.o.name).localeCompare(String(c.o.name),"ar");
+    return av-cv || codeCmp(a.minCode||minCode(a.rows),c.minCode||minCode(c.rows));
   });
   let sumRows="";
   sumData.forEach((g)=>{ const seq=data.indexOf(g)+1;
     // تجميع كل دفعات الوحدة: عدد الشهور = مجموع شهور كل الدفعات (يشمل المتأخرات)، والاستحقاق = أقرب ميعاد
     const byUnit={}, order=[];
     g.rows.forEach(x=>{ const u=x.u; const k=u.code;
-      if(!byUnit[k]){ byUnit[k]={unit:[u.project,(norm(u.block)+norm(u.bldg)),u.apt].filter(Boolean).join(" "), due:x.p.dueDate, months:0, items:[]}; order.push(k); }
+      if(!byUnit[k]){ byUnit[k]={code:u.code,unit:[u.project,(norm(u.block)+norm(u.bldg)),u.apt].filter(Boolean).join(" "), due:x.p.dueDate, months:0, items:[]}; order.push(k); }
       const e=byUnit[k]; e.months+=x.p.months;
       // بنود الشهور: كل شهر بقيمته المتبقية (الجزئي منفصل بملحوظة)
       if(x.p.idxs) x.p.idxs.forEach(i=>{ const rem=effRem(u,i), due=effDue(u,i), pd=u.grid[i].paid||0;
         e.items.push({v:rem, part:pd>0.0001, paid:pd, due}); });
       else for(let q=0;q<x.p.months;q++){ const qi=x.p.firstIdx+q; e.items.push({v:x.p.estRate!=null?Math.round(x.p.estRate*lastMonthFactor(u,qi)):(x.p.amount/x.p.months), part:false}); }
       if(ymdToUTC(x.p.dueDate)<ymdToUTC(e.due)) e.due=x.p.dueDate; });
-    const lines=order.map(k=>byUnit[k]).sort((a,c)=>ymdToUTC(a.due)-ymdToUTC(c.due));
+    const lines=order.map(k=>byUnit[k]).sort((a,c)=>ymdToUTC(a.due)-ymdToUTC(c.due)||codeCmp(a.code,c.code));
     // تجميع القيم المتتالية المتساوية: 77,000 × 3 — والجزئي سطر لوحده بملحوظة
     lines.forEach(l=>{ const grp=[]; l.items.forEach(it=>{ const last=grp[grp.length-1];
         if(!it.part && last && !last.part && Math.abs(last.v-it.v)<0.5) last.n++; else grp.push({v:it.v,n:1,part:it.part,paid:it.paid,due:it.due}); });
