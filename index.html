@@ -1219,14 +1219,15 @@ function bankBar(){
 }
 function filterBar(){
   const comps=allCompounds(); if(comps.length<=1) return "";
-  const cs=compoundSet(); const groups=compGroups(); const order=["بورتو","ميفيدا","فيلدج","الخارج"];
+  const cs=compoundSet(); const groups=compGroups(); const order=["ميفيدا","الخارج","بورتو","فيلدج"];
   const total=comps.length, sel=comps.filter(c=>cs.has(c)).length;
   const groupOn=g=>groups[g]&&groups[g].length&&cs.size===groups[g].length&&groups[g].every(c=>cs.has(c));
   const groupAllIn=g=>groups[g]&&groups[g].length&&groups[g].every(c=>cs.has(c));
   const allOn=sel===total;
-  const chip=(label,on,act,data,n)=>'<button data-act="'+act+'" '+(data||"")+' class="shrink-0 inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium transition '+(on?"bg-stone-500 text-white border-stone-500":"bg-white text-stone-500 border-stone-200")+'">'+(on?icon("check",12):"")+esc(label)+(n!=null?' <span class="opacity-60">'+n+'</span>':"")+'</button>';
-  let chips=chip("الكل",allOn,"compAll","",total);
+  const chip=(label,on,act,data,n)=>'<button data-act="'+act+'" '+(data||"")+' class="shrink-0 inline-flex items-center gap-1 rounded-full border px-2 sm:px-2.5 py-1 text-[10.5px] sm:text-[11px] font-medium transition '+(on?"bg-stone-500 text-white border-stone-500":"bg-white text-stone-500 border-stone-200")+'">'+esc(label)+(n!=null?' <span class="opacity-60">'+n+'</span>':"")+'</button>';
+  let chips="";
   order.forEach(g=>{ if(groups[g]&&groups[g].length) chips+=chip(g,groupOn(g),"compGroup",'data-g="'+esc(g)+'"',groups[g].length); });
+  chips+=chip("الكل",allOn,"compAll","",total);
   const open=!!state.compOpen;
   const panel = open ? '<div class="mt-2 rounded-2xl border border-stone-200 bg-white p-2.5 shadow-sm">'+
     order.map(g=>{ const list=groups[g]; if(!list||!list.length)return "";
@@ -1235,9 +1236,9 @@ function filterBar(){
         '<div class="flex flex-wrap gap-1">'+list.map(c=>{const on=cs.has(c);return '<button data-act="comp" data-c="'+esc(c)+'" class="inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] transition '+(on?"bg-stone-500 text-white border-stone-500":"bg-white text-stone-600 border-stone-200")+'">'+(on?icon("check",11):"")+esc(c)+'</button>';}).join("")+'</div></div>';
     }).join("")+'</div>' : "";
   return '<div class="mb-2">'+
-    '<div class="flex items-center gap-1.5 flex-wrap">'+
-      '<span class="text-[11px] text-stone-400 shrink-0 w-10">كمبوند</span>'+chips+
-      '<button data-act="compToggle" class="shrink-0 inline-flex items-center gap-1 text-[11px] font-medium text-stone-600 border border-dashed border-stone-300 rounded-full px-2.5 py-1">'+icon("layout",11)+' مفصّل '+sel+'/'+total+' <span class="text-[10px]">'+(open?"▴":"▾")+'</span></button>'+
+    '<div class="fitshrink flex items-center gap-1 sm:gap-1.5 flex-nowrap sm:flex-wrap">'+
+      '<span class="hidden sm:inline text-[11px] text-stone-400 shrink-0 w-10">كمبوند</span>'+chips+
+      '<button data-act="compToggle" title="اختيار مفصّل '+sel+'/'+total+'" class="shrink-0 inline-flex items-center gap-0.5 text-[10.5px] sm:text-[11px] font-medium text-stone-600 border border-dashed border-stone-300 rounded-full px-1.5 sm:px-2.5 py-1">'+icon("layout",11)+'<span class="hidden sm:inline"> مفصّل '+sel+'/'+total+'</span> <span class="text-[10px]">'+(open?"▴":"▾")+'</span></button>'+
     '</div>'+panel+'</div>';
 }
 
@@ -1327,14 +1328,15 @@ function viewMain(){
 
   const untils=untilOptions();
   const uChip=(u)=>{const on=m.to&&ymdToUTC(m.to)===ymdToUTC(u.d)&&!m.from;
-    return '<button data-act="rUntil" data-d="'+ymdToInput(u.d)+'" class="shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-semibold '+(on?"bg-stone-500 text-white border-stone-500":"bg-white text-stone-600 border-stone-200")+'">'+u.label+'</button>';};
+    return '<button data-act="rUntil" data-d="'+ymdToInput(u.d)+'" class="fc'+(on?' fon':'')+' shrink-0 rounded-full border px-2 sm:px-2.5 py-1 text-[10.5px] sm:text-[11px] font-semibold '+(on?"bg-stone-500 text-white border-stone-500":"bg-white text-stone-600 border-stone-200")+'">'+u.label+'</button>';};
   const allOn=!m.from&&!m.to;
   const customOn=!!m.from || (m.to && !untils.some(u=>ymdToUTC(u.d)===ymdToUTC(m.to)));
-  const range='<div class="flex items-center gap-1.5 mb-2 flex-wrap">'+
-    '<span class="text-[11px] text-stone-400 shrink-0 w-10">حتى</span>'+
-    '<button data-act="rPreset" data-p="all" class="shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-semibold '+(allOn?"bg-stone-500 text-white border-stone-500":"bg-white text-stone-600 border-stone-200")+'">الكل</button>'+
+  // سطر واحد: أكبر عدد اختيارات يكفي العرض، و«الكل» في الآخر دايمًا (fitRows بتخفي الزيادة)
+  const range='<div class="fitrow flex items-center gap-1 sm:gap-1.5 mb-2 flex-nowrap overflow-hidden">'+
+    '<span class="text-[10.5px] sm:text-[11px] text-stone-400 shrink-0 sm:w-10">حتى</span>'+
     untils.map(uChip).join("")+
-    (customOn?'<span class="shrink-0 rounded-full bg-stone-500 text-white px-2.5 py-1 text-[11px] font-semibold">مخصص</span>':'')+
+    (customOn?'<span class="shrink-0 rounded-full bg-stone-500 text-white px-2 sm:px-2.5 py-1 text-[10.5px] sm:text-[11px] font-semibold">مخصص</span>':'')+
+    '<button data-act="rPreset" data-p="all" class="shrink-0 rounded-full border px-2 sm:px-2.5 py-1 text-[10.5px] sm:text-[11px] font-semibold '+(allOn?"bg-stone-500 text-white border-stone-500":"bg-white text-stone-600 border-stone-200")+'">الكل</button>'+
   '</div>';
   const bankActive=(function(){ const bs=bankSet(); const n=allBanks().length; return bs.size && bs.size<n; })();
   const moreFilt=!!state.moreFilt;
@@ -3082,7 +3084,30 @@ function render(){
   if(state.quickPay) html+=quickPayModal();
   paint(html);
   renderBNav();
+  fitRows(); fitShrink();
 }
+// يخفي آخر اختيارات التاريخ اللي مش مكفّيها السطر (غير المختار) لحد ما السطر يكفي
+function fitRows(){
+  document.querySelectorAll(".fitrow").forEach(row=>{
+    const cs=[...row.querySelectorAll(".fc")]; cs.forEach(c=>{ c.style.display=""; });
+    let guard=0;
+    while(row.scrollWidth>row.clientWidth+1 && guard++<10){
+      const vis=cs.filter(c=>c.style.display!=="none"); if(!vis.length) break;
+      const cand=vis.filter(c=>!c.classList.contains("fon")); (cand.length?cand[cand.length-1]:vis[vis.length-1]).style.display="none";
+    }
+  });
+}
+window.addEventListener("resize",function(){ try{fitRows();}catch(e){} });
+// سطر الكمبوند: لو الخط على الجهاز أعرض من المتوقع، صغّره درجة درجة عشان يفضل سطر واحد
+function fitShrink(){
+  document.querySelectorAll(".fitshrink").forEach(row=>{
+    const bs=[...row.querySelectorAll("button")]; bs.forEach(x=>{ x.style.fontSize=""; x.style.paddingLeft=""; x.style.paddingRight=""; }); row.style.flexWrap="";
+    const steps=[[10,7],[9.5,6],[9,5]];
+    for(let k=0;k<steps.length && row.scrollWidth>row.clientWidth+1;k++){ bs.forEach(x=>{ x.style.fontSize=steps[k][0]+"px"; x.style.paddingLeft=x.style.paddingRight=steps[k][1]+"px"; }); }
+    if(row.scrollWidth>row.clientWidth+1) row.style.flexWrap="wrap";
+  });
+}
+window.addEventListener("resize",function(){ try{fitShrink();}catch(e){} });
 // ===== شريط التنقل السفلي (موبايل بس) =====
 function renderBNav(){
   const nav=document.getElementById("bnav"); if(!nav) return;
