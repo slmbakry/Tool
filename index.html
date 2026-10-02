@@ -832,13 +832,15 @@ const AUTO_KEY=APP_ID+":auto", BACKUP_DAYS=7, BACKUP_CHANGES=20;
 function load(){try{const raw=localStorage.getItem(STORAGE_KEY);if(raw){const p=JSON.parse(raw);
   state.owners=p.owners||[];state.meta=p.meta||null;state.tagModes=p.tagModes||{};state.backup=p.backup||{lastAt:null,changes:0};
   if(p.report){ const r=p.report;
-    state.report={from:r.from||null,to:r.to||null,preset:r.preset||"until",status:r.status||"all",
+    // الافتراضي عند فتح الأداة: الكمبوند «الكل» و«حتى» أول اختيار. لو الأداة شغالة فعلاً (تحديث من السحابة) نسيب اختيار المستخدم زي ما هو.
+    const prev=state.report, u0=untilOptions()[0];
+    state.report={from:prev?prev.from:null,to:prev?prev.to:(u0?u0.d:null),preset:"until",status:prev?prev.status:"all",byBen:prev?!!prev.byBen:false,
       collect:false,                       // الأداة تفتح دايمًا في وضع العرض
       source:r.source||"CIB OSOOL",sourceOther:r.sourceOther||"",payDate:todayYmd(),
       ownerMonths:r.ownerMonths||{},rows:{},benKey:null,
       expanded:new Set(),bankOpen:new Set()};
-    if(r.compounds) state.compounds=new Set(r.compounds);
-    if(r.banks) state.banks=new Set(r.banks);
+    if(!prev) state.compounds=null;      // الكل
+    if(r.banks && !prev) state.banks=new Set(r.banks);
   }
 }}catch(e){} if(!state.backup)state.backup={lastAt:null,changes:0}; ensureTagModes(); }
 function reportForSave(){ const r=state.report; if(!r)return null;
@@ -1175,6 +1177,22 @@ function sharedBenMap(){
   Object.keys(m).forEach(k=>{ if(m[k].length<2) delete m[k]; });
   return m;
 }
+// ===== العرض بالمستفيد: المستفيد اللي ليه أكتر من وحدة يتجمع في كارت واحد باسمه =====
+function unitsWord(n){ return n===1?"وحدة واحدة":(n===2?"وحدتين":(n<=10?(n+" وحدات"):(n+" وحدة"))); }
+function ownersWord(n){ return n===1?"مالك واحد":(n===2?"مالكين":(n<=10?(n+" ملاك"):(n+" مالك"))); }
+function benUnitCount(){ const m={}; state.owners.forEach(o=>{ const k=benKey(o); if(!k)return; m[k]=(m[k]||0)+o.units.filter(u=>unitVisible(u)&&!unitExcluded(u)).length; }); return m; }
+function mergeBen(data){
+  const cnt=benUnitCount(); const out=[], idx={};
+  data.forEach(g=>{ const k=benKey(g.o);
+    if(k && cnt[k]>1){
+      if(idx[k]==null){ idx[k]=out.length; out.push({ben:true,key:"ben:"+k,benK:k,label:benLabel(g.o),o:g.o,groups:[],rows:[],subtotal:0}); }
+      const c=out[idx[k]]; c.groups.push(g); c.rows=c.rows.concat(g.rows.map(x=>({u:x.u,p:x.p,o:g.o}))); c.subtotal+=g.subtotal;
+    } else out.push(g); });
+  out.forEach(c=>{ if(c.ben){ c.rows.sort((a,b)=>ymdToUTC(a.p.dueDate)-ymdToUTC(b.p.dueDate)||codeCmp(a.u.code,b.u.code)); c.earliest=c.rows[0].p.dueDate; c.minCode=minCode(c.rows); } });
+  out.sort((a,b)=>ymdToUTC(a.earliest)-ymdToUTC(b.earliest)||codeCmp(a.minCode||minCode(a.rows),b.minCode||minCode(b.rows)));
+  return out;
+}
+function cardGroups(c){ return c.ben?c.groups:[c]; }
 function sharedBenOf(o){ const k=benKey(o); if(!k)return null; const m=sharedBenMap(); return m[k]?{key:k,owners:m[k]}:null; }
 function allBanks(){ const s={}; state.owners.forEach(o=>{ s[bankOf(o)]=1; }); return Object.keys(s).sort((a,c)=>a.localeCompare(c,"ar")); }
 function bankSet(){ if(state.banks==null) state.banks=new Set(allBanks()); return state.banks; }
@@ -1284,15 +1302,20 @@ function viewMain(){
   // الأقسام بالتلات ألوان حسب أقرب ميعاد للمالك (قبل فلتر الحالة عشان المربعات تفضل ثابتة)
   const tT=todayYmd(); const toneOf=g=>dueTone(daysDiff(g.earliest,tT));
   const tSum={red:{n:0,v:0},orange:{n:0,v:0},green:{n:0,v:0}};
-  data.forEach(g=>{ const k=toneOf(g); tSum[k].n++; tSum[k].v+=g.subtotal; });
-  const renewN=data.filter(g=>g.o.units.some(u=>unitVisible(u)&&u._c&&u._c.renewal)).length;
+  // العرض بالمستفيد (مش في وضع السداد): الكروت = مستفيدين مجمّعين + ملاك عاديين
+  const byBen=!!m.byBen && !m.collect;
+  let cards=byBen?mergeBen(data):data;
+  const hasRenew=c=>cardGroups(c).some(g=>g.o.units.some(u=>unitVisible(u)&&u._c&&u._c.renewal));
+  cards.forEach(g=>{ const k=toneOf(g); tSum[k].n++; tSum[k].v+=g.subtotal; });
+  const renewN=cards.filter(hasRenew).length;
   const stMap={overdue:"red",soon:"orange",later:"green"};
   if(m.status!=="all"){
-    data=data.filter(g=>{
-      if(m.status==="renewal") return g.o.units.some(u=>unitVisible(u)&&u._c&&u._c.renewal);
+    cards=cards.filter(g=>{
+      if(m.status==="renewal") return hasRenew(g);
       return stMap[m.status]?toneOf(g)===stMap[m.status]:true;
     });
   }
+  data=[]; cards.forEach(c=>{ cardGroups(c).forEach(g=>data.push(g)); });
   const grand=data.reduce((s,g)=>s+g.subtotal,0), totalPays=data.reduce((s,g)=>s+g.rows.length,0);
 
   const tBtn=(act,ic,label,cls,badge)=>'<button data-act="'+act+'" class="relative inline-flex flex-col items-center justify-center gap-1 rounded-2xl px-1 py-2 text-[10px] font-bold border shadow-sm transition active:scale-95 '+cls+'">'+icon(ic,18)+'<span class="truncate max-w-full px-0.5">'+label+'</span>'+(badge?'<span class="absolute -top-1.5 -left-1 min-w-[18px] h-[18px] rounded-full bg-orange-500 text-white text-[10px] leading-[18px] px-1 text-center tnum shadow-sm">'+badge+'</span>':'')+'</button>';
@@ -1370,7 +1393,9 @@ function viewMain(){
     '<input id="mainSearch" value="'+esc(m.q)+'" placeholder="ابحث بالمالك، المستفيد، رقم الوحدة، التليفون، أو الحساب" class="w-full rounded-xl border border-stone-200 bg-white py-2.5 pr-9 pl-8 text-[13px] outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"/>'+
     (m.q?'<button data-act="mainSearchClear" class="absolute top-1/2 -translate-y-1/2 left-2.5 text-stone-400">'+icon("x",14)+'</button>':"")+'</div>';
   const filt=filterBar();
-  const range2=range+moreBtn+morePanel;
+  const vChip=(on,v,label)=>'<button data-act="viewBy" data-v="'+v+'" class="shrink-0 rounded-full border px-2 sm:px-2.5 py-1 text-[10.5px] sm:text-[11px] font-semibold '+(on?"bg-stone-500 text-white border-stone-500":"bg-white text-stone-600 border-stone-200")+'">'+label+'</button>';
+  const viewRow=m.collect?'':'<div class="flex items-center gap-1 sm:gap-1.5 mb-2"><span class="text-[10.5px] sm:text-[11px] text-stone-400 shrink-0 sm:w-10">العرض</span>'+vChip(!m.byBen,"owner","بالمالك")+vChip(!!m.byBen,"ben","بالمستفيد")+'</div>';
+  const range2=range+viewRow+moreBtn+morePanel;
   const collectM=m.collect?'<div class="lg:hidden flex items-center justify-between gap-2 mb-2 rounded-xl bg-emerald-50 border border-emerald-200 px-3 py-1.5"><span class="text-[12px] font-bold text-emerald-800 inline-flex items-center gap-1.5">'+icon("banknote",14)+' وضع السداد</span><button data-act="toggleCollect" class="inline-flex items-center gap-1 rounded-lg bg-emerald-600 text-white px-3 py-1 text-[11px] font-bold">'+icon("x",12)+'<span>إنهاء</span></button></div>':'';
   const toolbarS=toolbar.slice(0,-6)+collectM+search+'</div>';
   if(!data.length) return toolbarS+filt+range2+head+alertsStripHTML()+searchFallbackHTML(m,data)+
@@ -1425,7 +1450,7 @@ function viewMain(){
         '</div>'+
         '<button data-act="benClear" class="w-full mt-2 rounded-xl border border-stone-300 bg-white py-1.5 text-[11px] font-semibold text-stone-700">إلغاء تجميع المستفيد</button>'+
       '</div>';
-    } else if(multi.length){
+    } else if(multi.length && !byBen){
       benBanner='<div class="rounded-2xl border border-stone-200 bg-stone-50/70 px-3 py-2 mb-2.5">'+
         '<div class="text-[11px] font-semibold text-stone-800 mb-1.5">'+icon("user",12)+' في '+multi.length+' مستفيد ليه أكتر من مالك — اجمعهم في تحويل واحد:</div>'+
         '<div class="flex flex-wrap gap-1.5">'+multi.map(k=>{ const gs=byBen[k]; const tot=gs.reduce((s,g)=>s+g.subtotal,0);
@@ -1486,10 +1511,10 @@ function viewMain(){
     '<button data-act="expandAll" class="inline-flex items-center gap-1 text-[11px] font-medium text-stone-500 border border-stone-200 bg-white rounded-lg px-2 py-1">'+
       icon(allOpen?"x":"chevronDown",12)+' '+(allOpen?"اضغط الكل":"افتح الكل")+'</button></div>':"";
   const TONE_T={red:{t:"متأخر",c:"text-red-700"},orange:{t:"خلال 30 يوم",c:"text-orange-700"},green:{t:"بعد كده",c:"text-emerald-700"}};
-  const groups=["red","orange","green"].map(k=>{ const gs=data.filter(g=>toneOf(g)===k); if(!gs.length) return "";
+  const groups=["red","orange","green"].map(k=>{ const gs=cards.filter(g=>toneOf(g)===k); if(!gs.length) return "";
     const tot=gs.reduce((s2,g)=>s2+g.subtotal,0);
     return '<div class="mb-1"><div class="flex items-center justify-between px-1 mt-3 mb-1.5"><span class="text-[12px] font-bold '+TONE_T[k].c+'">● '+TONE_T[k].t+' <span class="text-stone-400 font-normal">('+gs.length+')</span></span><span class="text-[12px] font-bold tnum text-stone-700">'+fmt(tot)+cur()+'</span></div>'+
-      gs.map(g=>ownerCard(g,m)).join("")+'</div>'; }).join("");
+      gs.map(g=>g.ben?benCard(g,m):ownerCard(g,m)).join("")+'</div>'; }).join("");
   return toolbarS+filt+range2+head+alertsStripHTML()+gapBanner+estBanner+benBanner+'<div class="lg:flex lg:gap-4 lg:items-start">'+
     '<div class="'+(paneOn?'lg:w-[46%] lg:flex-none':'flex-1')+' min-w-0">'+expandBar+'<div class="space-y-2.5">'+groups+'</div>'+outOfRange+'</div>'+
     (paneOn?paneHTML(data,m):sideHTML)+
@@ -1617,6 +1642,42 @@ function paneHTML(data,m){
     '<button data-act="printOwner" data-key="'+esc(o.key)+'" class="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl border border-stone-300 py-2 text-[12px] font-semibold text-stone-700">'+icon("printer",14)+' ورقة المالك</button>'+
     '<button data-act="openOwner" data-key="'+esc(o.key)+'" data-from="main" data-full="1" class="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl border border-stone-300 py-2 text-[12px] font-semibold text-stone-700">'+icon("user",14)+' صفحة المالك كاملة</button></div>';
   return paneWrap('<div class="rounded-2xl bg-white border border-stone-200 shadow-sm overflow-hidden">'+head+bank+units+acts+'</div>');
+}
+// كارت المستفيد المجمّع: وحدات أكتر من مالك (أو مالك واحد) فلوسهم رايحة لنفس المستفيد
+function benCard(c,m){
+  const isE=m.expanded.has(c.key);
+  const dd=daysDiff(c.earliest,todayYmd()); const tone=TONE[dueTone(dd)];
+  const us=[]; c.rows.forEach(x=>{ if(!us.some(z=>z.u===x.u)) us.push({u:x.u,o:x.o,total:0}); us.find(z=>z.u===x.u).total+=x.p.amount; });
+  const stD=us.map(z=>settledOf(z.u)).filter(Boolean).sort((a,b)=>ymdToUTC(a)-ymdToUTC(b));
+  const stMixed=stD.length>1 && ymdToUTC(stD[0])!==ymdToUTC(stD[stD.length-1]);
+  const o0=c.o; const bank=norm(o0.bank);
+  const nOwn=c.groups.length;
+  const head='<button data-act="benToggle" data-key="'+esc(c.key)+'" class="w-full text-right px-3.5 py-3 active:bg-stone-50">'+
+    '<div class="text-[10px] text-stone-400 inline-flex items-center gap-1">'+icon("user",10)+' مستفيد · '+ownersWord(nOwn)+' · '+unitsWord(us.length)+'</div>'+
+    '<div class="flex items-center justify-between gap-2">'+
+      '<span class="font-bold text-sm truncate text-stone-900 inline-flex items-center gap-1 min-w-0">'+icon(isE?"chevronDown":"arrowRight",13,"opacity-40 shrink-0")+'<span class="truncate">'+esc(c.label)+'</span></span>'+
+      '<span class="text-base font-bold tnum shrink-0">'+fmt(c.subtotal)+cur()+'</span></div>'+
+    ((bank||norm(o0.benAcc))?'<div class="text-[11px] text-stone-500 mt-0.5 truncate"><bdi>'+esc(bank||"")+'</bdi>'+(bank&&norm(o0.benAcc)?' · ':'')+'<bdi dir="ltr" class="tnum">'+esc(norm(o0.benAcc)||"")+'</bdi></div>':'')+
+    '<div class="flex items-center justify-between gap-2 mt-2 pt-2 border-t border-stone-100 text-[11.5px]">'+
+      '<span class="text-stone-500 truncate min-w-0">مسدد حتى <b class="text-stone-800"><bdi dir="ltr">'+(stD[0]?fmtDate(stD[0]):"—")+'</bdi></b>'+(stMixed?' <span class="text-stone-400 text-[10px]">(أقدم وحدة)</span>':'')+'</span>'+
+      '<span class="shrink-0 rounded-full border px-2 py-0.5 font-semibold '+tone.chip+'">'+dueLabel(dd)+'</span></div>'+
+  '</button>';
+  const uName=u=>esc([u.project,(norm(u.block)+norm(u.bldg)),u.apt].filter(Boolean).join(" "));
+  // مقفول: سطر لكل وحدة (باسم مين + الإجمالي) — مفتوح: الدفعات كاملة بزرار السداد تحت اسم كل مالك
+  const body=isE?(
+      '<div class="px-3 py-2.5 bg-stone-50/70 border-t border-stone-100 space-y-1.5">'+ownerBankFields(o0)+'</div>'+
+      c.groups.map(g=>'<div class="px-3.5 py-1.5 bg-stone-50 border-t border-stone-100 flex items-center justify-between gap-2 text-[11px]">'+
+          '<span class="font-bold text-stone-700 truncate">باسم: '+esc(g.o.name)+'</span>'+
+          '<span class="shrink-0 inline-flex items-center gap-1.5"><b class="tnum">'+fmt(g.subtotal)+'</b>'+
+          '<button data-act="openOwner" data-key="'+esc(g.o.key)+'" data-from="main" data-full="1" class="text-[10px] font-medium text-stone-600 border border-stone-200 bg-white rounded-lg px-1.5 py-0.5">صفحة المالك</button></span></div>'+
+        '<div class="divide-y divide-stone-100">'+g.rows.map(x=>payRow(x,m)).join("")+'</div>').join("")
+    ):(
+      '<div class="border-t border-stone-100 divide-y divide-stone-100">'+us.map(z=>
+        '<div class="px-3.5 py-2 flex items-center justify-between gap-2"><div class="min-w-0"><div class="text-[12px] font-semibold text-stone-800 truncate"><bdi dir="ltr">'+uName(z.u)+'</bdi></div>'+
+          '<div class="text-[10.5px] text-stone-500 truncate">باسم: '+esc(z.o.name)+'</div></div>'+
+        '<span class="text-[12.5px] font-bold tnum shrink-0">'+fmt(z.total)+'</span></div>').join("")+'</div>');
+  return '<div class="ocard rounded-2xl border border-stone-200 bg-white overflow-hidden shadow-sm flex mb-2.5 break-inside-avoid">'+
+    '<div class="w-1 shrink-0 '+tone.bar+'"></div><div class="flex-1 min-w-0">'+head+body+'</div></div>';
 }
 function unitInfoBtn(u){
   const info=[u.project,(norm(u.block)+norm(u.bldg)),u.apt].filter(Boolean).join(" ");
@@ -2796,7 +2857,35 @@ function printReport(){
       "<thead><tr><th>الاستحقاق</th><th>الوحدة</th><th class='num'>سعر الشهر</th><th style='text-align:center'>شهور</th><th class='num'>الإجمالي</th></tr></thead><tbody>"+rws+
       "<tr class='grandrow'><td colspan='4'>إجمالي التحويل للمستفيد</td><td class='num'>"+fmt(grand)+"</td></tr></tbody></table></div>";
   }
-  if(!benMode) data.forEach(g=>{ let rws="";
+  // العرض بالمستفيد: المستفيد المجمّع ياخد قسم واحد، والملاك عناوين فرعية جوّاه
+  const cards=(!benMode && r.byBen)?mergeBen(data):data;
+  const benSec=(c,seq)=>{ const o0=c.o; const instaP=isInsta(o0)&&!norm(o0.bank);
+    const bankLine=[((o0.payMethods||[]).length?("الدفع: "+o0.payMethods.join(" / ")):""),(o0.benName?("المستفيد: "+o0.benName):""),
+      (instaP?("إنستاباي: "+egPhone(o0.benAcc)):((o0.bank?("بنك: "+o0.bank+" · "):"")+(o0.benAcc?("حساب: "+o0.benAcc):"")))].filter(Boolean).join(" — ");
+    let rws="", nPay=0;
+    c.groups.forEach(g=>{
+      rws+="<tr class='ownhd'><td colspan='4'>باسم: "+esc(g.o.name)+"</td><td class='num'>"+fmt(g.subtotal)+"</td></tr>";
+      g.rows.forEach(x=>{ const p=x.p,u=x.u; nPay++;
+        const perM=p.months?Math.round(p.gross/p.months):p.gross;
+        const partNote=p.partial?" <span style='color:#b45309;font-weight:400;font-size:9px'>(مدفوع "+fmt(p.paid)+")</span>":"";
+        const etag=p.beyond?" <span class='bynd'>بعد نهاية العقد</span>":(p.estimated?" <span class='estg'>تقديري</span>":"");
+        const ce=snapMonthEnd(u.contractEnd);
+        const sub2=[norm(u.beds)?esc(u.beds)+" غرفة":"", ce?("نهاية العقد "+ds(ce)):""].filter(Boolean).join(" · ");
+        rws+="<tr><td class='date'>"+ds(p.dueDate)+"</td>"+
+          "<td><div class='uid'>"+esc([u.project,(norm(u.block)+norm(u.bldg)),u.apt].filter(Boolean).join(" "))+" <span class='mono'>("+esc(u.code)+")</span>"+etag+"</div>"+
+            "<div class='perd'>من <span dir='ltr'>"+ds(p.from)+"</span> إلى <span dir='ltr'>"+ds(p.to)+"</span></div>"+
+            (sub2?"<div class='usub'>"+sub2+"</div>":"")+"</td>"+
+          "<td class='num'>"+fmt(perM)+partNote+"</td>"+
+          "<td style='text-align:center'>"+p.months+"</td>"+
+          "<td class='num'>"+fmt(p.amount)+"</td></tr>"; }); });
+    return "<div class='sec' id='own"+seq+"'><div class='sec-h'><span><a href='#summary' class='seqb' title='رجوع للكشف المختصر'>"+seq+"</a> "+esc(c.label)+" <span style='font-weight:400;font-size:9.5px;color:#78716c'>(مستفيد)</span></span><span class='v'>"+fmt(c.subtotal)+" ج.م</span></div>"+
+      (bankLine?"<div class='sec-sub'>"+esc(bankLine)+"</div>":"")+
+      "<div class='sec-sub'>تحويل واحد يشمل "+ownersWord(c.groups.length)+" · "+nPay+" دفعة</div>"+
+      "<table style='table-layout:fixed'><colgroup><col style='width:13%'><col style='width:37%'><col style='width:17%'><col style='width:8%'><col style='width:25%'></colgroup>"+
+      "<thead><tr><th>الاستحقاق</th><th>الوحدة</th><th class='num'>سعر الشهر</th><th style='text-align:center'>شهور</th><th class='num'>الإجمالي</th></tr></thead><tbody>"+rws+
+      "<tr class='grandrow'><td colspan='4'>إجمالي التحويل للمستفيد</td><td class='num'>"+fmt(c.subtotal)+"</td></tr></tbody></table></div>"; };
+  if(!benMode) cards.forEach(g=>{ let rws="";
+    if(g.ben){ grand+=g.subtotal; body+=benSec(g,cards.indexOf(g)+1); return; }
     g.rows.forEach(x=>{const p=x.p,u=x.u;
       const perM=p.months?Math.round(p.gross/p.months):p.gross;
       const partNote=p.partial?" <span style='color:#b45309;font-weight:400;font-size:9px'>(مدفوع "+fmt(p.paid)+")</span>":"";
@@ -2816,7 +2905,7 @@ function printReport(){
     grand+=g.subtotal;
     const instaPhone=isInsta(g.o)&&!norm(g.o.bank);
     const bank=[((g.o.payMethods||[]).length?("الدفع: "+g.o.payMethods.join(" / ")):""), (g.o.benName?("المستفيد: "+g.o.benName):""), (instaPhone?("إنستاباي: "+egPhone(g.o.benAcc)):((g.o.bank?("بنك: "+g.o.bank+" · "):"")+(g.o.benAcc?("حساب: "+g.o.benAcc):"")))].filter(Boolean).join(" — ");
-    const seq=data.indexOf(g)+1;
+    const seq=cards.indexOf(g)+1;
     const gUnits=[]; g.rows.forEach(x=>{ if(gUnits.indexOf(x.u)<0) gUnits.push(x.u); });
     const stV=gUnits.map(u=>{ const st=settledOf(u); return {u,t:st?ds(st):"—"}; });
     const sameSt=stV.every(v=>v.t===stV[0].t);
@@ -2831,12 +2920,12 @@ function printReport(){
       "<thead><tr><th>الاستحقاق</th><th>الوحدة</th><th class='num'>سعر الشهر</th><th style='text-align:center'>شهور</th><th class='num'>الإجمالي</th></tr></thead><tbody>"+rws+"</tbody></table></div>";
   });
   // ترتيب الكشف المختصر بأقرب ميعاد استحقاق
-  const sumData=data.slice().sort((a,c)=>{
+  const sumData=cards.slice().sort((a,c)=>{
     const av=a.earliest?ymdToUTC(a.earliest):Infinity, cv=c.earliest?ymdToUTC(c.earliest):Infinity;
     return av-cv || codeCmp(a.minCode||minCode(a.rows),c.minCode||minCode(c.rows));
   });
   let sumRows="";
-  sumData.forEach((g)=>{ const seq=data.indexOf(g)+1;
+  sumData.forEach((g)=>{ const seq=cards.indexOf(g)+1;
     // تجميع كل دفعات الوحدة: عدد الشهور = مجموع شهور كل الدفعات (يشمل المتأخرات)، والاستحقاق = أقرب ميعاد
     const byUnit={}, order=[];
     g.rows.forEach(x=>{ const u=x.u; const k=u.code;
@@ -2858,7 +2947,7 @@ function printReport(){
     const rateCell=lines.map(l=>"<div class='ul'"+hs(l)+">"+l.grp.map(g=>"<div class='rtl'><bdi dir='ltr'>"+fmt(g.v)+"<span class='rx'>×</span>"+g.n+"</bdi></div>"+
       (g.part?"<div class='rpn' title='من "+fmt(g.due)+"'>جزئي · مدفوع "+fmt(g.paid)+"</div>":"")).join("")+"</div>").join("");
     sumRows+="<tr><td class='sq'><a href='#own"+seq+"'>"+seq+"</a></td>"+
-      "<td class='onm'><a href='#own"+seq+"'>"+esc(g.o.name)+"</a></td>"+
+      "<td class='onm'><a href='#own"+seq+"'>"+esc(g.ben?g.label:g.o.name)+"</a>"+(g.ben?" <span style='font-weight:400;font-size:8.5px;color:#78716c'>(مستفيد · "+ownersWord(g.groups.length)+")</span>":"")+"</td>"+
       "<td class='ucol'>"+unitCell+"</td>"+
       "<td class='dcol'>"+dueCell+"</td>"+
       "<td class='rcol'>"+rateCell+"</td>"+
@@ -3316,6 +3405,8 @@ function handleClick(e){
     window.scrollTo(0,0); render(); }
   else if(act==="statusF"){ syncMainFromDOM(); ensureMain().status=t.dataset.s; render(); }
   else if(act==="moreFilt"){ syncMainFromDOM(); state.moreFilt=!state.moreFilt; render(); }
+  else if(act==="viewBy"){ const m=ensureMain(); m.byBen=(t.dataset.v==="ben"); state.pane=null; render(); }
+  else if(act==="benToggle"){ const m=ensureMain(); const k=t.dataset.key; if(m.expanded.has(k)) m.expanded.delete(k); else m.expanded.add(k); render(); }
   else if(act==="unitMon"){ state.unitSel=+t.dataset.idx; render(); }
   else if(act==="unitTable"){ state.unitTable=!state.unitTable; render(); }
   else if(act==="ownInc"||act==="ownDec"){
@@ -3519,7 +3610,7 @@ function handleClick(e){
   else if(act==="cardToggle"){ syncMainFromDOM(); const k=t.dataset.key; const s=ensureMain().expanded; if(s.has(k))s.delete(k); else s.add(k); render(); }
   else if(act==="bankToggle"){ syncMainFromDOM(); const m2=ensureMain(); if(!m2.bankOpen)m2.bankOpen=new Set();
     const k=t.dataset.key; if(m2.bankOpen.has(k))m2.bankOpen.delete(k); else m2.bankOpen.add(k); render(); }
-  else if(act==="expandAll"){ syncMainFromDOM(); const m2=ensureMain(); const all=buildReport().map(g=>g.o.key);
+  else if(act==="expandAll"){ syncMainFromDOM(); const m2=ensureMain(); const all=(m2.byBen&&!m2.collect?mergeBen(buildReport()).map(g=>g.ben?g.key:g.o.key):buildReport().map(g=>g.o.key));
     if(m2.expanded.size>=all.length && all.length){ m2.expanded=new Set(); } else { m2.expanded=new Set(all); } render(); }
   else if(act==="rToggle"){ syncMainFromDOM(); const k=t.dataset.key; const s=ensureMain().expanded; if(s.has(k))s.delete(k); else s.add(k); render(); }
   else if(act==="rExcel"){ syncMainFromDOM(); try{exportReportExcel();}catch(e){alert("تعذّر التصدير: "+e.message);} }
