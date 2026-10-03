@@ -328,6 +328,52 @@ function increaseDiff(u){
 // هل الشهر يدخل في عدّ الشهور العادية؟ (فروق الزيادة لأ — ليها بند منفصل)
 function isMonthSkip(u,idx){ return isIgnoredIdx(u,idx) || (!u.increaseIgnored && isIncreaseIdx(u,idx)); }
 function isIgnoredIdx(u,idx){ return !!(u.ignoredIdx && u.ignoredIdx[idx]) || coveredBySettled(u,idx); }
+// شهر سماح: شهر فاضي عن قصد (بدون إيجار) — السداد بيعدّي من فوقه ومايتحسبش فجوة
+function isGraceIdx(u,idx){ const g=u.grid[idx]; return !!(u.graceIdx && u.graceIdx[idx]) && !(g && g.due>0); }
+function setGraceIdx(u,idx,val){ if(!u.graceIdx) u.graceIdx={}; if(val) u.graceIdx[idx]=true; else delete u.graceIdx[idx]; }
+// الشهور الفاضية (اللي لسه ماتحددتش) اللي هتوقف سداد n شهر على الوحدة
+function payBlockGaps(u,n){
+  const gaps=gridGaps(u); if(!gaps.length) return [];
+  const b=unitMonthsBreakdown(u,n); if(b.blocked) return gaps;
+  const last=b.lines.length?b.lines[b.lines.length-1].idx:null;
+  return last==null?[]:gaps.filter(i=>i<last);
+}
+// بعد تحديد شهر فاضي: الدفعات اللي كانت واقفة «فائض» بتترحّل من تاني بنفس تاريخها ومصدرها
+function reallocStuck(u){
+  const st=(u.payments||[]).filter(p=>(p.leftover||0)>0.01); if(!st.length) return [];
+  const out=[];
+  st.forEach(p=>{ const pos=u.payments.indexOf(p); removePayment(u,p.id);
+    recordPayment(u,p.amount,p.date,p.source,p.note); const np=u.payments.pop();
+    const keep=Object.assign({},p,{allocated:np.allocated,leftover:np.leftover,blocked:np.blocked});
+    u.payments.splice(Math.min(pos,u.payments.length),0,keep); out.push(keep); });
+  recomputeSettled(u); return out;
+}
+// وصف الشهور اللي الدفعة اترحّلت عليها: «مايو ← سبتمبر 2026»
+function allocSpanAr(p){ const ix=(p.allocated||[]).map(a=>a.idx).sort((a,b)=>a-b); if(!ix.length) return "";
+  const a=idxToYM(ix[0]), b=idxToYM(ix[ix.length-1]);
+  return ix.length===1?(MON_AR[a.m-1]+" "+a.y):(MON_AR[a.m-1]+(a.y!==b.y?" "+a.y:"")+" ← "+MON_AR[b.m-1]+" "+b.y); }
+// اختيارين للشهر الفاضي: سماح ولا قيمة — بيتستخدموا في شاشة الوحدة ونوافذ السداد
+function gapChoiceHTML(u,idx){
+  const gf=state.gapFill, d='data-code="'+esc(u.code)+'" data-idx="'+idx+'"';
+  if(gf && gf.code===u.code && gf.idx===idx){
+    const all=Object.keys(u.grid).map(Number).sort((a,b)=>a-b);
+    const prev=all.filter(k=>k<idx && u.grid[k].due>0).pop();
+    return '<div class="flex items-center gap-1.5 mt-2.5">'+
+      '<input id="gap-val" value="'+(prev!=null?Math.round(u.grid[prev].due):"")+'" inputmode="numeric" dir="ltr" placeholder="قيمة الإيجار" class="flex-1 min-w-0 rounded-xl border-2 border-stone-300 px-3 py-2 text-[14px] font-bold tnum text-left"/>'+
+      '<button data-act="gapFillSave" '+d+' class="shrink-0 rounded-xl bg-stone-500 text-white px-4 py-2.5 text-[12px] font-bold">حفظ</button>'+
+      '<button data-act="gapFillCancel" class="shrink-0 rounded-xl border border-stone-300 bg-white text-stone-600 px-3 py-2.5 text-[12px] font-semibold">إلغاء</button></div>';
+  }
+  return '<div class="grid grid-cols-2 gap-2 mt-2.5">'+
+    '<button data-act="gapGrace" '+d+' class="rounded-xl bg-stone-500 text-white py-2 px-1 text-[11.5px] font-bold active:scale-[0.98]">شهر سماح (بدون إيجار)</button>'+
+    '<button data-act="gapFillOpen" '+d+' class="rounded-xl border border-stone-300 bg-white text-stone-700 py-2 px-1 text-[11.5px] font-bold active:scale-[0.98]">سجّل قيمة الإيجار</button></div>';
+}
+// تنبيه نافذة السداد: شهر فاضي لازم يتحدد قبل التسجيل
+function gapGuardHTML(u,idx,unitLabel){
+  return '<div class="rounded-xl border border-orange-300 bg-orange-50 p-3">'+
+    '<div class="text-[12px] font-bold text-orange-900">'+(unitLabel?'<bdi dir="ltr">'+esc(unitLabel)+'</bdi> · ':'')+monLabelAr(idx)+' فاضي في جدول الوحدة</div>'+
+    '<div class="text-[11px] text-orange-800 mt-1 leading-5">لازم يتحدد الأول، وإلا المبلغ مش هيترحّل على الشهور اللي بعده.</div>'+
+    gapChoiceHTML(u,idx)+'</div>';
+}
 function setIgnoredIdx(u,idx,val){
   if(!u.ignoredIdx) u.ignoredIdx={};
   if(val) u.ignoredIdx[idx]=true; else delete u.ignoredIdx[idx];
@@ -337,7 +383,7 @@ function gridGaps(u){
   const real=all.filter(i=>u.grid[i].due>0);
   if(real.length<2) return [];
   const first=real[0], last=real[real.length-1];
-  return all.filter(i=>i>first && i<last && !(u.grid[i].due>0));
+  return all.filter(i=>i>first && i<last && !(u.grid[i].due>0) && !isGraceIdx(u,i));
 }
 // تحذير: وحدات جدولها فيه شهور فاضية في النص (أي سداد عليها هيقف ويبقى فائض)
 // شريط تنبيهات مضغوط — سطر واحد بشرايح عدّ، والتفاصيل في شاشة «مراجعة»
@@ -684,6 +730,7 @@ function unitMonthsBreakdown(u,n){
     for(let k=all.indexOf(firstUnpaid); k<all.length && take.length<N; k++){
       const i=all[k], g=u.grid[i];
       if(!(g.due>0)){
+        if(isGraceIdx(u,i)) continue;                        // شهر سماح — يتخطّاه
         if(lastReal!=null && i<lastReal){ gapMonths.push(i); break; }
         break;
       }
@@ -808,12 +855,15 @@ function allUnitsBar(key,label){
         '<button data-act="allPay" data-key="'+esc(key)+'" class="inline-flex items-center gap-1 rounded-xl bg-stone-500 text-white px-3 py-1.5 text-[11px] font-bold active:scale-[0.97]">'+icon("banknote",12)+(one?' سداد':' سداد الكل')+'</button>'+
       '</span></div></div>';
 }
+// وحدات المجموعة اللي فيها شهر فاضي هيوقف السداد (أول شهر لكل وحدة)
+function groupGaps(key,N){ const out=[]; groupOwners(key).forEach(o=>ownerPayableUnits(o).forEach(u=>{ const g=payBlockGaps(u,N); if(g.length) out.push({o,u,idx:g[0]}); })); return out; }
 // نافذة سداد كل الوحدات مع بعض
 function groupPayModal(q){
   const list=groupUnits(q.gkey,q.months); const total=list.reduce((s2,x)=>s2+x.amt,0);
   const own=groupOwners(q.gkey); const isBen=String(q.gkey).indexOf("ben:")===0;
   const title=isBen?(own[0]?benLabel(own[0]):"مستفيد"):(own[0]?own[0].name:"");
   const multiO=own.length>1;
+  const gg=groupGaps(q.gkey,q.months); const lock=gg.length?' opacity-40 pointer-events-none':'';
   const srcBtn=(v)=>'<button data-act="qpSrc" data-s="'+esc(v)+'" class="flex-1 rounded-lg border px-1 py-1.5 text-[11px] font-semibold '+(q.source===v?"bg-stone-500 text-white border-stone-500":"bg-white text-stone-600 border-stone-200")+'">'+esc(v)+'</button>';
   const rows=list.map(x=>'<div class="px-2.5 py-1.5 flex items-center justify-between gap-2"><span class="min-w-0"><span class="block text-[12px] font-semibold text-stone-800 truncate"><bdi dir="ltr">'+esc([x.u.project,(norm(x.u.block)+norm(x.u.bldg)),x.u.apt].filter(Boolean).join(" "))+'</bdi></span>'+
       '<span class="block text-[10px] text-stone-500 truncate">'+(multiO?('باسم: '+esc(x.o.name)+' · '):'')+(x.b.lines.length?periodAr(x.b.lines[0].from,x.b.lines[x.b.lines.length-1].to):'')+(x.b.hasEstimated?' · <span class="text-orange-600">تقديري</span>':'')+'</span></span>'+
@@ -825,7 +875,8 @@ function groupPayModal(q){
           '<div class="text-[10px] text-stone-400 truncate">سداد '+(isBen?'كل وحدات المستفيد':'كل وحدات المالك')+' · '+unitsWord(list.length)+'</div></div>'+
         '<button data-act="qpClose" class="w-8 h-8 shrink-0 rounded-full bg-stone-100 text-stone-500 text-lg leading-none">×</button>'+
       '</div>'+
-      '<div class="p-4 space-y-3">'+
+      (gg.length?'<div class="px-4 pt-3 space-y-2">'+gg.map(x=>gapGuardHTML(x.u,x.idx,[x.u.project,(norm(x.u.block)+norm(x.u.bldg)),x.u.apt].filter(Boolean).join(" "))).join("")+'</div>':"")+
+      '<div class="p-4 space-y-3'+lock+'">'+
         '<div><label class="block text-[11px] text-stone-500 mb-1">عدد الشهور لكل وحدة</label>'+
           '<div class="flex items-center gap-2">'+
             '<button data-act="qpM" data-d="-1" class="w-10 h-10 rounded-xl border border-stone-300 bg-white text-lg font-bold">−</button>'+
@@ -840,10 +891,10 @@ function groupPayModal(q){
           (q.source==="Other"?'<input id="qp-other" value="'+esc(q.sourceOther||"")+'" placeholder="اكتب المصدر" class="w-full mt-1.5 rounded-xl border border-stone-300 px-2 py-2 text-[12px]"/>':"")+
         '</div>'+
       '</div>'+
-      '<div class="px-4 pb-3"><button data-act="qpCopy" class="w-full inline-flex items-center justify-center gap-1.5 rounded-xl border py-2 text-[12px] font-semibold '+(state.copied==="qp"?'border-emerald-300 bg-emerald-50 text-emerald-700':'border-stone-300 bg-white text-stone-700')+'">'+icon(state.copied==="qp"?"check":"copy",14)+(state.copied==="qp"?' اتنسخ':' نسخ الوحدات ('+monthsWord(q.months)+')')+'</button></div>'+
+      '<div class="px-4 pb-3'+lock+'"><button data-act="qpCopy" class="w-full inline-flex items-center justify-center gap-1.5 rounded-xl border py-2 text-[12px] font-semibold '+(state.copied==="qp"?'border-emerald-300 bg-emerald-50 text-emerald-700':'border-stone-300 bg-white text-stone-700')+'">'+icon(state.copied==="qp"?"check":"copy",14)+(state.copied==="qp"?' اتنسخ':' نسخ الوحدات ('+monthsWord(q.months)+')')+'</button></div>'+
       '<div class="p-4 pt-0 flex gap-2">'+
         '<button data-act="qpClose" class="flex-1 rounded-2xl border border-stone-300 bg-white py-3 text-sm font-semibold text-stone-600">إلغاء</button>'+
-        '<button data-act="qpConfirm" class="flex-1 rounded-2xl bg-emerald-600 text-white py-3 text-sm font-bold">تأكيد السداد</button>'+
+        '<button data-act="qpConfirm"'+(gg.length?' disabled':'')+' class="flex-1 rounded-2xl py-3 text-sm font-bold '+(gg.length?'bg-stone-300 text-white pointer-events-none':'bg-emerald-600 text-white')+'">تأكيد السداد</button>'+
       '</div></div></div>';
 }
 // رسالة عائمة تحت (بعد السداد) فيها زرار نسخ اللي اتسدد
@@ -883,6 +934,7 @@ function recordPayment(u,amount,dateYmd,source,note){
     // الفجوة الحقيقية = صفر بين أقساط حقيقية.
     // الأصفار قبل أول قسط (شهور خارج العقد) أو بعد آخر قسط ما توقفش الترحيل.
     if(!(g.due>0)){
+      if(isGraceIdx(u,idx)) continue;                        // شهر سماح (بدون إيجار) — يتخطّاه
       if(firstReal!=null && lastReal!=null && idx>firstReal && idx<lastReal){ hitGap=true; break; }
       continue;
     }
@@ -930,7 +982,7 @@ function removePayment(u,id){
 const state={owners:[],meta:null,view:"main",owner:null,unit:null,query:"",compounds:null,err:"",copied:null,pending:null,clearAsk:false,bulk:null,flash:"",report:null,tagModes:{},tagFilter:null,editing:false,draft:null,keepEdits:true,repCompound:null,repMonthIdx:null,repSort:"desc",repBeds:null,backup:{lastAt:null,changes:0},bkSnooze:false};
 
 // رقم الإصدار: بيتغيّر مع كل تحديث — ظاهر فوق في الهيدر عشان تتأكد إن النسخة الجديدة اشتغلت
-const BUILD="2026-10-03 13:55";
+const BUILD="2026-10-03 18:40";
 const AUTO_KEY=APP_ID+":auto", BACKUP_DAYS=7, BACKUP_CHANGES=20;
 function load(){try{const raw=localStorage.getItem(STORAGE_KEY);if(raw){const p=JSON.parse(raw);
   state.owners=p.owners||[];state.meta=p.meta||null;state.tagModes=p.tagModes||{};state.backup=p.backup||{lastAt:null,changes:0};
@@ -1887,6 +1939,7 @@ function quickPayModal(){
   const f=findUnit(q.code); if(!f) return "";
   const u=f.u, o=f.o;
   const b=unitMonthsBreakdown(u,q.months);
+  const pg=payBlockGaps(u,q.months); const lock=pg.length?' opacity-40 pointer-events-none':'';
   const info=[u.project,(norm(u.block)+norm(u.bldg)),u.apt].filter(Boolean).join(" ");
   const per=b.lines.length?periodAr(b.lines[0].from,b.lines[b.lines.length-1].to):"—";
   const srcBtn=(v)=>'<button data-act="qpSrc" data-s="'+esc(v)+'" class="flex-1 rounded-lg border px-1 py-1.5 text-[11px] font-semibold '+(q.source===v?"bg-stone-500 text-white border-stone-500":"bg-white text-stone-600 border-stone-200")+'">'+esc(v)+'</button>';
@@ -1897,8 +1950,9 @@ function quickPayModal(){
           '<div class="text-[10px] text-stone-400 truncate">'+esc(o.name)+' · <span class="font-mono">'+esc(u.code)+'</span></div></div>'+
         '<button data-act="qpClose" class="w-8 h-8 shrink-0 rounded-full bg-stone-100 text-stone-500 text-lg leading-none">×</button>'+
       '</div>'+
-      (b.lines.length?'<div class="px-4 pt-3">'+periodBox(b.lines[0].from,b.lines[b.lines.length-1].to,b.count,{dark:true,label:"المبلغ ده مقابل مدة"})+'</div>':"")+
-      '<div class="p-4 space-y-3">'+
+      (pg.length?'<div class="px-4 pt-3">'+gapGuardHTML(u,pg[0])+'</div>':"")+
+      (b.lines.length?'<div class="px-4 pt-3'+lock+'">'+periodBox(b.lines[0].from,b.lines[b.lines.length-1].to,b.count,{dark:true,label:"المبلغ ده مقابل مدة"})+'</div>':"")+
+      '<div class="p-4 space-y-3'+lock+'">'+
         '<div><label class="block text-[11px] text-stone-500 mb-1">المبلغ</label>'+
           '<input id="qp-amt" value="'+Math.round(q.amount)+'" inputmode="numeric" dir="ltr" class="w-full rounded-xl border-2 border-stone-300 px-3 py-2.5 text-lg font-bold tnum text-left"/></div>'+
         '<div><label class="block text-[11px] text-stone-500 mb-1">عدد الشهور</label>'+
@@ -1913,7 +1967,6 @@ function quickPayModal(){
               '<span class="inline-flex items-center gap-1.5"><input type="checkbox" class="inc-inc w-4 h-4 accent-orange-600" data-code="'+esc(u.code)+'"'+(u.incInclude?" checked":"")+'/> ضمّ فرق الزيادة</span>'+
               '<span class="tnum">+'+fmt(b.inc.total)+'</span></label>'+
             '<div class="text-[10px] text-orange-800 mt-0.5">'+b.inc.months.map(i=>monLabel(i)).join("، ")+'</div></div>':"")+
-          (b.blocked?'<p class="text-[10px] text-red-600 mt-1">⚠ فيه شهر فاضي في الجدول — السداد هيقف عنده</p>':"")+
         '</div>'+
         '<div><label class="block text-[11px] text-stone-500 mb-1">تاريخ السداد</label>'+
           '<input id="qp-date" type="date" value="'+ymdToInput(q.date)+'" dir="ltr" class="w-full rounded-xl border border-stone-300 px-2 py-2 text-[12px]"/></div>'+
@@ -1922,10 +1975,10 @@ function quickPayModal(){
           (q.source==="Other"?'<input id="qp-other" value="'+esc(q.sourceOther||"")+'" placeholder="اكتب المصدر" class="w-full mt-1.5 rounded-xl border border-stone-300 px-2 py-2 text-[12px]"/>':"")+
         '</div>'+
       '</div>'+
-      '<div class="px-4 pb-3"><button data-act="qpCopy" class="w-full inline-flex items-center justify-center gap-1.5 rounded-xl border py-2 text-[12px] font-semibold '+(state.copied==="qp"?'border-emerald-300 bg-emerald-50 text-emerald-700':'border-stone-300 bg-white text-stone-700')+'">'+icon(state.copied==="qp"?"check":"copy",14)+(state.copied==="qp"?' اتنسخ':' نسخ بيانات الوحدة ('+monthsWord(q.months)+')')+'</button></div>'+
+      '<div class="px-4 pb-3'+lock+'"><button data-act="qpCopy" class="w-full inline-flex items-center justify-center gap-1.5 rounded-xl border py-2 text-[12px] font-semibold '+(state.copied==="qp"?'border-emerald-300 bg-emerald-50 text-emerald-700':'border-stone-300 bg-white text-stone-700')+'">'+icon(state.copied==="qp"?"check":"copy",14)+(state.copied==="qp"?' اتنسخ':' نسخ بيانات الوحدة ('+monthsWord(q.months)+')')+'</button></div>'+
       '<div class="p-4 pt-0 flex gap-2">'+
         '<button data-act="qpClose" class="flex-1 rounded-2xl border border-stone-300 bg-white py-3 text-sm font-semibold text-stone-600">إلغاء</button>'+
-        '<button data-act="qpConfirm" class="flex-1 rounded-2xl bg-emerald-600 text-white py-3 text-sm font-bold">تأكيد السداد</button>'+
+        '<button data-act="qpConfirm"'+(pg.length?' disabled':'')+' class="flex-1 rounded-2xl py-3 text-sm font-bold '+(pg.length?'bg-stone-300 text-white pointer-events-none':'bg-emerald-600 text-white')+'">تأكيد السداد</button>'+
       '</div>'+
     '</div></div>';
 }
@@ -2441,7 +2494,7 @@ function monthStripHTML(u,c){
   const first=real[0], last=real[real.length-1];
   const items=[];
   for(let i=first;i<=last;i++){ const g=u.grid[i];
-    if(!g||!(g.due>0)){ items.push({idx:i,kind:"gap"}); continue; }
+    if(!g||!(g.due>0)){ items.push({idx:i,kind:isGraceIdx(u,i)?"grace":"gap"}); continue; }
     const due=effDue(u,i), paid=g.paid||0, rem=effRem(u,i);
     if(u.ignoredIdx&&u.ignoredIdx[i]){ items.push({idx:i,kind:"ign",due,paid,rem:0}); continue; }
     if(coveredBySettled(u,i)||rem<=0.0001){ items.push({idx:i,kind:"paid",due,paid:Math.max(paid,due),rem:0}); continue; }
@@ -2453,12 +2506,13 @@ function monthStripHTML(u,c){
   unitDuePayments(u).filter(p=>p.estimated).forEach(p=>{ for(let q=0;q<p.months;q++){ const i=p.firstIdx+q; if(i<=last) continue;
     const v=Math.round((p.estRate!=null?p.estRate:p.amount/p.months)*lastMonthFactor(u,i));
     items.push({idx:i,kind:"est",due:v,paid:0,rem:v,beyond:p.beyond,dd:daysDiff(periodStart(anchor,i),T)}); } });
-  const remTot=items.reduce((s2,x)=>s2+(x.kind==="gap"||x.kind==="paid"||x.kind==="ign"?0:x.rem),0);
-  const sel=state.unitSel!=null&&items.some(x=>x.idx===state.unitSel)?state.unitSel:(items.find(x=>x.rem>0)||{}).idx;
+  const remTot=items.reduce((s2,x)=>s2+(x.kind==="gap"||x.kind==="grace"||x.kind==="paid"||x.kind==="ign"?0:x.rem),0);
+  const sel=state.unitSel!=null&&items.some(x=>x.idx===state.unitSel)?state.unitSel:(items.find(x=>x.kind==="gap")||items.find(x=>x.rem>0)||{}).idx;
   const box=x=>{ const {m}=idxToYM(x.idx); let cls, v;
     if(x.kind==="paid"){ cls="bg-stone-100 text-stone-400 border-stone-200"; v='<span class="font-medium">'+fmt(x.due)+' ✓</span>'; }
     else if(x.kind==="ign"){ cls="bg-white text-stone-300 border-stone-200 line-through"; v="متجاهل"; }
     else if(x.kind==="gap"){ cls="bg-white text-stone-300 border-dashed border-stone-300"; v="—"; }
+    else if(x.kind==="grace"){ cls="bg-stone-50 text-stone-500 border-stone-200"; v='<span class="font-semibold">سماح</span>'; }
     else if(x.kind==="est"){ cls="est-hatch bg-white text-stone-600 border-dashed border-stone-400"; v=fmt(x.rem); }
     else { const T2=TONE[x.kind];
       cls=x.part?("bg-"+(x.kind==="green"?"emerald":x.kind)+"-50 border-2 "+(x.kind==="red"?"text-red-700 border-red-500":x.kind==="orange"?"text-orange-700 border-orange-500":"text-emerald-800 border-emerald-500"))
@@ -2471,22 +2525,25 @@ function monthStripHTML(u,c){
   const x=items.find(z=>z.idx===sel);
   let det="";
   if(x){ const {y,m}=idxToYM(x.idx);
-    const lab={paid:["مسدد","text-stone-600"],ign:["متجاهل","text-stone-400"],gap:["شهر ناقص في الجدول","text-red-700"],est:[x.beyond?"تقديري — بعد نهاية العقد":"تقديري","text-stone-600"]}[x.kind]||
+    const lab={paid:["مسدد","text-stone-600"],ign:["متجاهل","text-stone-400"],gap:["شهر ناقص في الجدول","text-red-700"],grace:["شهر سماح — بدون إيجار","text-stone-600"],est:[x.beyond?"تقديري — بعد نهاية العقد":"تقديري","text-stone-600"]}[x.kind]||
       [dueLabel(x.dd)+(x.part?(x.inc?" — فرق زيادة":" — جزئي"):""),TONE[x.kind].txt];
     det='<div class="mt-3 rounded-xl bg-stone-50 border border-stone-200 p-3 text-[12px]">'+
       '<div class="flex justify-between items-center gap-2"><b>'+MON_AR[m-1]+' '+y+'</b><span class="font-semibold '+lab[1]+'">'+lab[0]+'</span></div>'+
-      (x.kind!=="gap"?'<div class="text-[11px] text-stone-500 mt-0.5">'+periodAr(periodStart(anchor,x.idx),periodEndU(u,anchor,x.idx))+'</div>'+
+      (x.kind==="grace"?'<div class="text-[11px] text-stone-500 mt-1 leading-5">مايتحسبش مستحق ولا متأخر، والسداد بيعدّي من فوقه.</div>'+
+        '<button data-act="graceUndo" data-code="'+esc(u.code)+'" data-idx="'+x.idx+'" class="mt-2 rounded-xl border border-stone-300 bg-white text-stone-600 px-3 py-1.5 text-[11px] font-semibold">إلغاء السماح</button>':
+      x.kind!=="gap"?'<div class="text-[11px] text-stone-500 mt-0.5">'+periodAr(periodStart(anchor,x.idx),periodEndU(u,anchor,x.idx))+'</div>'+
       '<div class="grid grid-cols-3 gap-2 mt-2 text-center"><div><div class="text-[10px] text-stone-400">المستحق</div><div class="font-bold tnum">'+fmt(x.due)+'</div></div>'+
         '<div><div class="text-[10px] text-stone-400">المسدد</div><div class="font-bold tnum">'+fmt(x.paid)+'</div></div>'+
         '<div><div class="text-[10px] text-stone-400">المتبقي</div><div class="font-bold tnum">'+fmt(x.rem||0)+'</div></div></div>':
-        '<div class="text-[11px] text-stone-500 mt-1">قيمته صفر في الملف وهو بين شهور مستحقة — صحّحه من «تعديل».</div>')+
+        '<div class="text-[11px] text-stone-500 mt-1 leading-5">الشهر ده مالوش قيمة، وأي سداد هيقف عنده. حدّد هو إيه:</div>'+gapChoiceHTML(u,x.idx))+
     '</div>'; }
   const key='<div class="flex flex-wrap gap-x-3 gap-y-1 mt-1 text-[10px] text-stone-500">'+
     '<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-stone-200"></span>مسدد</span>'+
     '<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-red-500"></span>متأخر</span>'+
     '<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-orange-500"></span>خلال 30 يوم</span>'+
     '<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-emerald-100 border border-emerald-400"></span>لسه</span>'+
-    (items.some(z=>z.kind==="est")?'<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded border border-dashed border-stone-400 est-hatch"></span>تقديري</span>':'')+'</div>';
+    (items.some(z=>z.kind==="est")?'<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded border border-dashed border-stone-400 est-hatch"></span>تقديري</span>':'')+
+    (items.some(z=>z.kind==="grace")?'<span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded bg-stone-50 border border-stone-300"></span>سماح</span>':'')+'</div>';
   return '<div class="mt-3 rounded-2xl border border-stone-200 bg-white p-3">'+
     '<div class="flex items-center justify-between mb-2"><span class="text-sm font-semibold text-stone-600 inline-flex items-center gap-1.5">'+icon("calendar",14)+' الشهور</span>'+
       '<span class="text-[11px] text-stone-400">المتبقي <b class="text-stone-800 tnum">'+fmt(remTot)+'</b>'+cur()+'</span></div>'+
@@ -3555,7 +3612,32 @@ function handleClick(e){
   else if(act==="moreFilt"){ syncMainFromDOM(); state.moreFilt=!state.moreFilt; render(); }
   else if(act==="viewBy"){ const m=ensureMain(); m.byBen=(t.dataset.v==="ben"); state.pane=null; render(); }
   else if(act==="benToggle"){ const m=ensureMain(); const k=t.dataset.key; if(m.expanded.has(k)) m.expanded.delete(k); else m.expanded.add(k); render(); }
-  else if(act==="unitMon"){ state.unitSel=+t.dataset.idx; render(); }
+  else if(act==="unitMon"){ state.unitSel=+t.dataset.idx; state.gapFill=null; render(); }
+  else if(act==="gapFillOpen"){ if(state.quickPay) qpSync(); state.gapFill={code:t.dataset.code,idx:+t.dataset.idx}; render();
+    const el=document.getElementById("gap-val"); if(el){ el.focus(); el.select(); } }
+  else if(act==="gapFillCancel"){ if(state.quickPay) qpSync(); state.gapFill=null; render(); }
+  else if(act==="gapGrace"||act==="gapFillSave"||act==="graceUndo"){
+    const f=findUnit(t.dataset.code); if(!f)return; const u=f.u, idx=+t.dataset.idx;
+    if(state.quickPay) qpSync();
+    let msg;
+    if(act==="graceUndo"){ setGraceIdx(u,idx,false); u.edited=true; recomputeSettled(u); computeAll(); markChange(1); save();
+      showToast(monLabelAr(idx)+" رجع شهر ناقص — السماح اتلغى."); render(); return; }
+    if(act==="gapGrace"){ setGraceIdx(u,idx,true); msg=monLabelAr(idx)+" اتسجّل شهر سماح ✓"; }
+    else { const el=document.getElementById("gap-val"); const v=Math.round(parseFloat(String(el?el.value:"").replace(/[^\d.]/g,""))||0);
+      if(!(v>0)){ state.flash="اكتب قيمة إيجار صحيحة."; render(); return; }
+      const old=u.grid[idx]||{}; u.grid[idx]={due:v,paid:old.paid||0}; setGraceIdx(u,idx,false);
+      msg="اتسجّل إيجار "+monLabelAr(idx)+" بـ "+fmt(v)+" ج.م ✓"; }
+    state.gapFill=null; u.edited=true;
+    // الدفعات اللي كانت واقفة فائض بتترحّل لوحدها
+    const moved=reallocStuck(u); recomputeSettled(u);
+    computeAll(); markChange(1+moved.length); save();
+    if(moved.length){
+      const still=moved.reduce((s2,p)=>s2+(p.leftover||0),0);
+      msg+=moved.length===1?(" — ودفعة "+fmt(moved[0].amount)+" اترحّلت على "+allocSpanAr(moved[0])):(" — و"+moved.length+" دفعات فائض اترحّلت");
+      if(still>0.01) msg+=" (لسه "+fmt(still)+" فائض — فيه شهر فاضي تاني)";
+      state.quickPay=null;                                  // المستحق اتغيّر — النافذة تتقفل عشان مايتسجلش سداد مرتين
+    } else if(state.quickPay && !state.quickPay.group){ const q=state.quickPay; const f2=findUnit(q.code); if(f2) q.amount=Math.round(dueAmount(f2.u,q.months)); }
+    showToast(msg); render(); }
   else if(act==="unitTable"){ state.unitTable=!state.unitTable; render(); }
   else if(act==="ownInc"||act==="ownDec"){
     const key=t.dataset.key, m=ensureMain();
@@ -3571,6 +3653,9 @@ function handleClick(e){
   else if(act==="bulkSrc"){ syncMainFromDOM(); ensureMain().source=t.dataset.s; render(); }
   else if(act==="bulkConfirm"){
     syncMainFromDOM(); const m=ensureMain(); let n=0,total=0; const blockedList=[];
+    { const gl=[]; Object.keys(m.rows).forEach(key=>{ const r=m.rows[key]; if(!r.checked)return; const f=findUnit(key.split("|")[0]); if(!f)return;
+        const g=payBlockGaps(f.u, ownerMonthsFor(f.o)); if(g.length) gl.push(f.u.code+" ("+monLabelAr(g[0])+")"); });
+      if(gl.length){ state.flash="⚠️ "+gl.length+" وحدة فيها شهر فاضي لازم يتحدد الأول (سماح ولا قيمة) — افتح الوحدة ودوس على الشهر: "+gl.join("، ")+". مفيش حاجة اتسجّلت."; window.scrollTo(0,0); render(); return; } }
     const bulkPaid=bulkSelectedText();
     Object.keys(m.rows).forEach(key=>{ const r=m.rows[key]; if(!r.checked)return; const code=key.split("|")[0]; const f=findUnit(code); if(!f)return;
       if(!(r.amount>0)){ r.amount=Math.round(dueAmount(f.u, ownerMonthsFor(f.o))); } if(!(r.amount>0))return;
@@ -3655,6 +3740,8 @@ function handleClick(e){
     const nM=ownerMonthsFor(o); const m2=ensureMain();
     const units=o.units.filter(u=>unitVisible(u)&&!unitExcluded(u)).filter(u=>unitMonthsBreakdown(u,nM).total>0);
     if(!units.length){ state.flash="مفيش مستحقات."; render(); return; }
+    { const gl=units.map(u=>{ const g=payBlockGaps(u,nM); return g.length?(u.code+" ("+monLabelAr(g[0])+")"):null; }).filter(Boolean);
+      if(gl.length){ state.flash="⚠️ فيه شهر فاضي لازم يتحدد الأول (سماح ولا قيمة) — افتح الوحدة ودوس على الشهر: "+gl.join("، "); render(); return; } }
     const total=units.reduce((s2,u)=>s2+Math.round(unitMonthsBreakdown(u,nM).total),0);
     if(!window.confirm("هيتسجّل سداد "+fmt(total)+" ج.م على "+units.length+" وحدة ("+nM+" شهر لكل وحدة). تمام؟")) return;
     let n=0, anyLeft=0;
@@ -3664,7 +3751,7 @@ function handleClick(e){
     computeAll(); markChange(n); save();
     state.flash="اتسجّل سداد "+n+" وحدة بإجمالي "+fmt(total)+" ج.م"+(anyLeft?(" ⚠️ فيه "+fmt(anyLeft)+" فائض ما اترحّلش."):" ✓");
     render(); }
-  else if(act==="qpClose"){ state.quickPay=null; render(); }
+  else if(act==="qpClose"){ state.quickPay=null; state.gapFill=null; render(); }
   else if(act==="allM"){ const m2=ensureMain(); const k=t.dataset.key; const d=parseInt(t.dataset.d,10)||0; m2.ownerMonths=m2.ownerMonths||{}; m2.ownerMonths[k]=Math.max(1,groupMonths(k)+d); save(); render(); }
   else if(act==="allCopy"){ const k=t.dataset.key; copyText(groupUnitsText(k,groupMonths(k))).then(ok=>{ if(ok) flashCopied("all:"+k); else { state.flash="تعذّر النسخ"; render(); } }); }
   else if(act==="allPay"){ const k=t.dataset.key; const m2=ensureMain();
@@ -3686,6 +3773,7 @@ function handleClick(e){
     const d=parseInt(t.dataset.d,10)||0; q.months=Math.max(1,q.months+d);
     const m2=ensureMain(); m2.ownerMonths=m2.ownerMonths||{}; m2.ownerMonths[q.gkey]=q.months; render(); }
   else if(act==="qpConfirm" && state.quickPay && state.quickPay.group){ const q=state.quickPay; qpSync();
+    if(groupGaps(q.gkey,q.months).length){ render(); return; }
     const list=groupUnits(q.gkey,q.months); if(!list.length){ state.quickPay=null; state.flash="مفيش مستحقات."; render(); return; }
     const paidText=groupUnitsText(q.gkey,q.months);        // قبل التسجيل
     const note=(q.source==="Other")?(q.sourceOther||""):""; let total=0, left=0;
@@ -3705,6 +3793,7 @@ function handleClick(e){
     const f=findUnit(q.code); if(!f){ state.quickPay=null; render(); return; }
     const amt=Math.round(q.amount||0);
     if(!(amt>0)){ state.flash="اكتب مبلغ صحيح."; render(); return; }
+    if(payBlockGaps(f.u,q.months).length){ render(); return; }
     const note=(q.source==="Other")?(q.sourceOther||""):"";
     const paidText=unitPayText(f.o,f.u,q.months,amt);        // قبل التسجيل: نفس اللي اتعرض في النافذة
     recordPayment(f.u, amt, q.date, q.source, note);
