@@ -3072,13 +3072,14 @@ function printReport(){
     // تجميع كل دفعات الوحدة: عدد الشهور = مجموع شهور كل الدفعات (يشمل المتأخرات)، والاستحقاق = أقرب ميعاد
     const byUnit={}, order=[];
     g.rows.forEach(x=>{ const u=x.u; const k=u.code;
-      if(!byUnit[k]){ byUnit[k]={code:u.code,unit:[u.project,(norm(u.block)+norm(u.bldg)),u.apt].filter(Boolean).join(" "), due:x.p.dueDate, months:0, items:[]}; order.push(k); }
+      if(!byUnit[k]){ byUnit[k]={code:u.code,unit:[u.project,(norm(u.block)+norm(u.bldg)),u.apt].filter(Boolean).join(" "), due:x.p.dueDate, to:x.p.to, months:0, items:[]}; order.push(k); }
       const e=byUnit[k]; e.months+=x.p.months;
       // بنود الشهور: كل شهر بقيمته المتبقية (الجزئي منفصل بملحوظة)
       if(x.p.idxs) x.p.idxs.forEach(i=>{ const rem=effRem(u,i), due=effDue(u,i), pd=u.grid[i].paid||0;
         e.items.push({v:rem, part:pd>0.0001, paid:pd, due}); });
       else for(let q=0;q<x.p.months;q++){ const qi=x.p.firstIdx+q; e.items.push({v:x.p.estRate!=null?Math.round(x.p.estRate*lastMonthFactor(u,qi)):(x.p.amount/x.p.months), part:false}); }
-      if(ymdToUTC(x.p.dueDate)<ymdToUTC(e.due)) e.due=x.p.dueDate; });
+      if(ymdToUTC(x.p.dueDate)<ymdToUTC(e.due)) e.due=x.p.dueDate;
+      if(x.p.to && (!e.to || ymdToUTC(x.p.to)>ymdToUTC(e.to))) e.to=x.p.to; });
     const lines=order.map(k=>byUnit[k]).sort((a,c)=>ymdToUTC(a.due)-ymdToUTC(c.due)||codeCmp(a.code,c.code));
     // تجميع القيم المتتالية المتساوية: 77,000 × 3 — والجزئي سطر لوحده بملحوظة
     lines.forEach(l=>{ const grp=[]; l.items.forEach(it=>{ const last=grp[grp.length-1];
@@ -3087,19 +3088,21 @@ function printReport(){
     const hs=l=>" style='height:"+l.h+"px'";
     const unitCell=lines.map(l=>"<div class='ul'"+hs(l)+">"+esc(l.unit)+"</div>").join("");
     const dueCell=lines.map(l=>"<div class='ul dt'"+hs(l)+">"+ds(l.due)+"</div>").join("");
+    const toCell=lines.map(l=>"<div class='ul dt' style='height:"+l.h+"px;font-weight:700;color:#1c1917'>"+(l.to?ds(l.to):"—")+"</div>").join("");
     const rateCell=lines.map(l=>"<div class='ul'"+hs(l)+">"+l.grp.map(g=>"<div class='rtl'><bdi dir='ltr'>"+fmt(g.v)+"<span class='rx'>×</span>"+g.n+"</bdi></div>"+
       (g.part?"<div class='rpn' title='من "+fmt(g.due)+"'>جزئي · مدفوع "+fmt(g.paid)+"</div>":"")).join("")+"</div>").join("");
     sumRows+="<tr><td class='sq'><a href='#own"+seq+"'>"+seq+"</a></td>"+
       "<td class='onm'><a href='#own"+seq+"'>"+esc(g.ben?g.label:g.o.name)+"</a>"+(g.ben?" <span style='font-weight:400;font-size:8.5px;color:#78716c'>(مستفيد · "+ownersWord(g.groups.length)+")</span>":"")+"</td>"+
       "<td class='ucol'>"+unitCell+"</td>"+
       "<td class='dcol'>"+dueCell+"</td>"+
+      "<td class='dcol'>"+toCell+"</td>"+
       "<td class='rcol'>"+rateCell+"</td>"+
       "<td class='num'>"+fmt(g.subtotal)+"</td></tr>"; });
   const summary=benMode?"":"<div class='sec' id='summary'><div class='sec-h'><span>كشف مختصر بالملاك <span style='font-weight:400;font-size:9.5px;color:#78716c'>(مرتّب بميعاد الاستحقاق)</span></span><span class='v'>"+data.length+" مالك</span></div>"+
-    "<table class='smt' style='table-layout:fixed'><colgroup><col style='width:5%'><col style='width:26%'><col style='width:21%'><col style='width:12%'><col style='width:19%'><col style='width:17%'></colgroup>"+
-    "<thead><tr><th>#</th><th>المالك</th><th>الوحدة</th><th>الاستحقاق</th><th class='num'>الإيجار الشهري</th><th class='num'>الإجمالي</th></tr></thead>"+
+    "<table class='smt' style='table-layout:fixed'><colgroup><col style='width:5%'><col style='width:23%'><col style='width:19%'><col style='width:12%'><col style='width:12%'><col style='width:15%'><col style='width:14%'></colgroup>"+
+    "<thead><tr><th>#</th><th>المالك</th><th>الوحدة</th><th>الاستحقاق</th><th>مغطى حتى</th><th class='num'>الإيجار الشهري</th><th class='num'>الإجمالي</th></tr></thead>"+
     "<tbody>"+sumRows+"</tbody>"+
-    "<tfoot><tr class='gt'><td colspan='5'>الإجمالي العام</td><td class='num'>"+fmt(grand)+"</td></tr></tfoot></table>"+
+    "<tfoot><tr class='gt'><td colspan='6'>الإجمالي العام</td><td class='num'>"+fmt(grand)+"</td></tr></tfoot></table>"+
     "<div class='hint'>اضغط رقم المالك أو اسمه للانتقال لتفاصيله · واضغط الرقم في التفاصيل للرجوع هنا</div></div>"+
     "<div class='pgbrk'></div>";
   const body2="<div class='totbar'><span>الإجمالي العام · "+data.length+" مالك</span><span class='v'>"+fmt(grand)+" ج.م</span></div>"+summary+body;
