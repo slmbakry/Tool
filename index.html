@@ -1544,7 +1544,7 @@ function ownerCard(g,m){
           '<button data-act="ownInc" data-key="'+esc(o.key)+'" class="px-2 py-1 text-stone-500 active:bg-stone-100">'+icon("plus",13)+'</button>'+
         '</div><span class="text-[10px] text-stone-400">شهور</span></div></div>';
   } else {
-    rows=g.rows.map(x=>payRow(x,m)).join("");
+    rows=unitRowsHTML(g.rows,m);
     subtotalHtml='<span class="text-base font-bold tnum shrink-0">'+fmt(g.subtotal)+cur()+'</span>';
   }
 
@@ -1636,7 +1636,7 @@ function paneHTML(data,m){
     '<div class="flex items-center gap-2 shrink-0"><div class="text-left"><div class="text-[10px] text-stone-400">المطلوب تحويله</div><div class="text-[20px] font-bold tnum leading-tight">'+fmt(total)+cur()+'</div></div>'+
       '<button data-act="paneClose" class="w-8 h-8 rounded-full bg-stone-100 text-stone-500 grid place-items-center" title="قفل">'+icon("x",15)+'</button></div></div>';
   const bank='<div class="p-3 grid grid-cols-2 gap-1.5 border-b border-stone-100">'+ownerBankFields(o)+'</div>';
-  const units=rows.length?'<div class="px-4 pt-3 text-[12px] font-bold text-stone-600">الدفعات المستحقة</div><div class="divide-y divide-stone-100">'+rows.map(x=>payRow(x,m)).join("")+'</div>':
+  const units=rows.length?'<div class="px-4 pt-3 text-[12px] font-bold text-stone-600">الدفعات المستحقة</div><div class="divide-y divide-stone-100">'+unitRowsHTML(rows,m)+'</div>':
     '<div class="px-4 py-6 text-center text-[12px] text-stone-400">مفيش مستحقات للمالك ده في المدة المختارة.</div>';
   const acts='<div class="p-3 flex gap-2 border-t border-stone-100">'+
     '<button data-act="printOwner" data-key="'+esc(o.key)+'" class="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl border border-stone-300 py-2 text-[12px] font-semibold text-stone-700">'+icon("printer",14)+' ورقة المالك</button>'+
@@ -1670,7 +1670,7 @@ function benCard(c,m){
           '<span class="font-bold text-stone-700 truncate">باسم: '+esc(g.o.name)+'</span>'+
           '<span class="shrink-0 inline-flex items-center gap-1.5"><b class="tnum">'+fmt(g.subtotal)+'</b>'+
           '<button data-act="openOwner" data-key="'+esc(g.o.key)+'" data-from="main" data-full="1" class="text-[10px] font-medium text-stone-600 border border-stone-200 bg-white rounded-lg px-1.5 py-0.5">صفحة المالك</button></span></div>'+
-        '<div class="divide-y divide-stone-100">'+g.rows.map(x=>payRow(x,m)).join("")+'</div>').join("")
+        '<div class="divide-y divide-stone-100">'+unitRowsHTML(g.rows,m)+'</div>').join("")
     ):(
       '<div class="border-t border-stone-100 divide-y divide-stone-100">'+us.map(z=>
         '<div class="px-3.5 py-2 flex items-center justify-between gap-2"><div class="min-w-0"><div class="text-[12px] font-semibold text-stone-800 truncate"><bdi dir="ltr">'+uName(z.u)+'</bdi></div>'+
@@ -1695,6 +1695,39 @@ function collectRow(u,ownerKey,amt,checked,months){
     '</div>'+
     (per?'<div class="mt-1.5 pr-7">'+per+'</div>':"")+
     '</div>';
+}
+// ===== وحدة واحدة = زرار سداد واحد + الأقساط سطور خفيفة تحته =====
+function unitRowsHTML(rows,m){
+  const order=[], by={};
+  rows.forEach(x=>{ const k=x.u.code; if(!by[k]){ by[k]={u:x.u,ps:[]}; order.push(k); } by[k].ps.push(x.p); });
+  return order.map(k=>unitPayBlock(by[k].u,by[k].ps,m)).join("");
+}
+function unitPayBlock(u,ps,m){
+  const T=todayYmd();
+  const total=ps.reduce((s2,p)=>s2+p.amount,0);
+  // النافذة تفتح على المتأخر كله (اللي ميعاده جه)، ولو مفيش متأخر تفتح على أول قسط
+  let due=ps.filter(p=>daysDiff(p.dueDate,T)<=0); if(!due.length) due=[ps[0]];
+  const payAmt=due.reduce((s2,p)=>s2+p.amount,0)+((u.incInclude&&!u.increaseIgnored)?increaseDiff(u).total:0);
+  const payMon=due.reduce((s2,p)=>s2+(p.months||1),0);
+  const lines=ps.map(p=>{ const dd=daysDiff(p.dueDate,T); const tone=TONE[dueTone(dd)];
+    const one=(p.months||1)===1;
+    const yr=p.from.y!==p.to.y; const sd=d=>fmtDate(d).slice(0,5)+(yr?"/"+String(d.y).slice(2):"");
+    const tag=p.beyond?' <span class="text-[9px] text-red-700 border border-red-200 bg-red-50 rounded px-1">بعد نهاية العقد</span>':(p.estimated?' <span class="text-[9px] text-orange-700 border border-orange-200 bg-orange-50 rounded px-1">تقديري</span>':'');
+    const part=p.partial?' <span class="text-[9px] text-orange-700 border border-orange-200 bg-orange-50 rounded px-1">جزئي</span>':'';
+    const lab=one?('<b class="font-semibold text-stone-800">'+MON_AR[p.from.m-1]+'</b> <span class="text-stone-400 tnum"><bdi dir="ltr">'+fmtDate(p.from).slice(0,5)+'</bdi> – <bdi dir="ltr">'+fmtDate(p.to).slice(0,5)+'</bdi></span>')
+      :('<b class="font-semibold text-stone-800"><bdi>'+monthsWord(p.months)+'</bdi></b> <span class="text-stone-400 tnum"><bdi dir="ltr">'+sd(p.from)+'</bdi> – <bdi dir="ltr">'+sd(p.to)+'</bdi></span>');
+    return '<div class="px-2.5 py-1.5 flex items-center justify-between gap-2"><span class="min-w-0 truncate">'+lab+tag+part+'</span>'+
+      '<span class="shrink-0 inline-flex items-center gap-2"><span class="'+tone.txt+' font-semibold">'+dueLabel(dd)+'</span><b class="tnum text-stone-900">'+fmt(p.amount)+'</b></span></div>'; }).join("");
+  return '<div class="px-3.5 py-2.5">'+
+    '<div class="flex items-center justify-between gap-2">'+
+      '<div class="min-w-0">'+unitInfoBtn(u)+'</div>'+
+      '<span class="shrink-0 inline-flex items-center gap-2">'+
+        '<span class="text-[15px] font-bold tnum">'+fmt(total)+cur()+'</span>'+
+        '<button data-act="quickPay" data-code="'+esc(u.code)+'" data-amt="'+Math.round(payAmt)+'" data-months="'+payMon+'" class="inline-flex items-center gap-1 rounded-xl bg-stone-500 text-white px-3 py-1.5 text-[11px] font-bold active:scale-[0.97]">'+icon("banknote",12)+' سداد</button>'+
+      '</span>'+
+    '</div>'+
+    '<div class="mt-2 rounded-xl border border-stone-200 divide-y divide-stone-100 text-[11px]">'+lines+'</div>'+
+    calNoteHTML(u)+increaseAlertHTML(u)+'</div>';
 }
 function payRow(x,m){
   const p=x.p,u=x.u;
