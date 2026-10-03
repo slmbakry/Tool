@@ -930,7 +930,7 @@ function removePayment(u,id){
 const state={owners:[],meta:null,view:"main",owner:null,unit:null,query:"",compounds:null,err:"",copied:null,pending:null,clearAsk:false,bulk:null,flash:"",report:null,tagModes:{},tagFilter:null,editing:false,draft:null,keepEdits:true,repCompound:null,repMonthIdx:null,repSort:"desc",repBeds:null,backup:{lastAt:null,changes:0},bkSnooze:false};
 
 // رقم الإصدار: بيتغيّر مع كل تحديث — ظاهر فوق في الهيدر عشان تتأكد إن النسخة الجديدة اشتغلت
-const BUILD="2026-10-03 13:50";
+const BUILD="2026-10-03 13:55";
 const AUTO_KEY=APP_ID+":auto", BACKUP_DAYS=7, BACKUP_CHANGES=20;
 function load(){try{const raw=localStorage.getItem(STORAGE_KEY);if(raw){const p=JSON.parse(raw);
   state.owners=p.owners||[];state.meta=p.meta||null;state.tagModes=p.tagModes||{};state.backup=p.backup||{lastAt:null,changes:0};
@@ -3088,7 +3088,7 @@ function printReport(){
     const hs=l=>" style='height:"+l.h+"px'";
     const unitCell=lines.map(l=>"<div class='ul'"+hs(l)+">"+esc(l.unit)+"</div>").join("");
     const dueCell=lines.map(l=>"<div class='ul dt'"+hs(l)+">"+ds(l.due)+"</div>").join("");
-    const toCell=lines.map(l=>"<div class='ul dt' style='height:"+l.h+"px;font-weight:700;color:#1c1917'>"+(l.to?ds(l.to):"—")+"</div>").join("");
+    const toCell=lines.map(l=>"<div class='ul dt'"+hs(l)+">"+(l.to?ds(l.to):"—")+"</div>").join("");
     const rateCell=lines.map(l=>"<div class='ul'"+hs(l)+">"+l.grp.map(g=>"<div class='rtl'><bdi dir='ltr'>"+fmt(g.v)+"<span class='rx'>×</span>"+g.n+"</bdi></div>"+
       (g.part?"<div class='rpn' title='من "+fmt(g.due)+"'>جزئي · مدفوع "+fmt(g.paid)+"</div>":"")).join("")+"</div>").join("");
     sumRows+="<tr><td class='sq'><a href='#own"+seq+"'>"+seq+"</a></td>"+
