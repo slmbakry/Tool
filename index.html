@@ -99,6 +99,7 @@ TODO — قائمة التنفيذ للسيشن الجاية (أداة متاب�
           <span class="block text-[11px] text-stone-500 leading-tight truncate" id="screen-name">متابعة الملاك</span>
         </span>
       </button>
+      <span id="buildTag" class="mr-auto shrink-0 text-[9px] text-stone-400 tnum" dir="ltr"></span>
     </div>
   </div>
   <div id="syncBar"></div>
@@ -927,6 +928,8 @@ function removePayment(u,id){
 /* ============================ state ============================ */
 const state={owners:[],meta:null,view:"main",owner:null,unit:null,query:"",compounds:null,err:"",copied:null,pending:null,clearAsk:false,bulk:null,flash:"",report:null,tagModes:{},tagFilter:null,editing:false,draft:null,keepEdits:true,repCompound:null,repMonthIdx:null,repSort:"desc",repBeds:null,backup:{lastAt:null,changes:0},bkSnooze:false};
 
+// رقم الإصدار: بيتغيّر مع كل تحديث — ظاهر فوق في الهيدر عشان تتأكد إن النسخة الجديدة اشتغلت
+const BUILD="2026-10-03 11:05";
 const AUTO_KEY=APP_ID+":auto", BACKUP_DAYS=7, BACKUP_CHANGES=20;
 function load(){try{const raw=localStorage.getItem(STORAGE_KEY);if(raw){const p=JSON.parse(raw);
   state.owners=p.owners||[];state.meta=p.meta||null;state.tagModes=p.tagModes||{};state.backup=p.backup||{lastAt:null,changes:0};
@@ -3309,6 +3312,7 @@ function render(){
         '<div class="flex gap-1.5 mt-2"><button data-act="backup" class="inline-flex items-center gap-1 rounded-lg bg-stone-500 text-white px-2.5 py-1.5 text-xs font-semibold">'+icon("download",13)+' نزّل نسخة احتياطية</button>'+
           '<button data-act="bkSnooze" class="rounded-lg border border-orange-300 text-orange-700 px-2.5 py-1.5 text-xs font-medium">لاحقًا</button></div></div></div></div>'+html;
   }
+  if(state.updateAvail){ html='<div class="mb-3 flex items-center justify-between gap-2 rounded-xl bg-stone-800 text-white px-3 py-2.5"><span class="text-[12px] leading-snug">فيه نسخة أحدث من الأداة.</span><button data-act="doUpdate" class="shrink-0 rounded-lg bg-white text-stone-800 px-3 py-1.5 text-[11px] font-bold">حدّث دلوقتي</button></div>'+html; }
   if(state.quickPay) html+=quickPayModal();
   html+=toastHTML();
   paint(html);
@@ -3671,6 +3675,9 @@ function handleClick(e){
     copyText(r.text).then(ok=>{ if(ok) flashCopied("bulk"); else { state.flash="تعذّر النسخ"; render(); } }); }
   else if(act==="toastCopy"){ const tt=state.toast; if(!tt||!tt.text)return; copyText(tt.text).then(ok=>{ if(ok&&state.toast===tt){ tt.copied=true; render(); } }); }
   else if(act==="toastClose"){ state.toast=null; render(); }
+  else if(act==="doUpdate"){ const go=function(){ location.replace(location.origin+location.pathname+"?v="+Date.now()); };
+    try{ if(typeof SB!=="undefined" && SB.signedIn && pendCount()>0){ SB.push().then(function(r){ if(r&&r.ok) pendClear(); go(); },go); return; } }catch(e){}
+    go(); }
   else if(act==="qpM" && state.quickPay && state.quickPay.group){ const q=state.quickPay; qpSync();
     const d=parseInt(t.dataset.d,10)||0; q.months=Math.max(1,q.months+d);
     const m2=ensureMain(); m2.ownerMonths=m2.ownerMonths||{}; m2.ownerMonths[q.gkey]=q.months; render(); }
@@ -4150,6 +4157,15 @@ const SB = (function(){
 
 /* ============================ boot ============================ */
 load(); computeAll(); if(state.owners.length && !loadAuto()) saveAuto(); render();
+(function(){ const bt=document.getElementById("buildTag"); if(bt) bt.textContent="v "+BUILD.slice(8,10)+"/"+BUILD.slice(5,7)+" "+BUILD.slice(11); })();
+// فحص التحديث: لو النسخة اللي على السيرفر أحدث من اللي شغالة (الكاش)، يظهر شريط «تحديث»
+let _updCheckAt=0;
+async function checkUpdate(){
+  if(location.protocol.indexOf("http")!==0) return; const now=Date.now(); if(now-_updCheckAt<120000) return; _updCheckAt=now;
+  try{ const r=await fetch(location.pathname+"?v="+now,{cache:"no-store"}); if(!r.ok) return; const t=await r.text();
+    const mm=t.match(/const BUILD="([^"]+)"/); if(mm && mm[1]!==BUILD && !state.updateAvail){ state.updateAvail=mm[1]; render(); } }catch(e){}
+}
+checkUpdate(); document.addEventListener("visibilitychange",function(){ if(document.visibilityState==="visible") checkUpdate(); });
 // نسخة احتياطية تلقائية أسبوعية — تنزّل لوحدها من غير ما تفتكر
 const AUTOBK_KEY=APP_ID+":autobk";
 function autoBackupCheck(){
