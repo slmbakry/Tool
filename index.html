@@ -779,6 +779,71 @@ function bulkSelectedText(){
   if(n>1){ L.push(""); L.push("TOTAL: "+fmt(total)+" EGP"); }
   return {text:L.join("\n"),n};
 }
+// ===== كل وحدات المالك/المستفيد مع بعض: نفس عدد الشهور لكل وحدة =====
+function groupOwners(key){ key=String(key||""); if(key.indexOf("ben:")===0){ const k=key.slice(4); return state.owners.filter(o=>benKey(o)===k); } return state.owners.filter(o=>o.key===key); }
+function groupMonths(key){ const m=ensureMain(); if(m.ownerMonths&&m.ownerMonths[key]!=null) return m.ownerMonths[key];
+  let mx=1; groupOwners(key).forEach(o=>ownerPayableUnits(o).forEach(u=>{ mx=Math.max(mx,u.payEvery||1); })); return mx; }
+function groupUnits(key,N){ const out=[]; groupOwners(key).forEach(o=>ownerPayableUnits(o).forEach(u=>{ const b=unitMonthsBreakdown(u,N); if(b.total>0) out.push({o,u,b,amt:Math.round(b.total)}); })); return out; }
+function groupUnitsText(key,N){ const list=groupUnits(key,N); const L=[]; let total=0, lastO=null;
+  list.forEach(x=>{ if(x.o!==lastO){ if(L.length&&L[L.length-1]!=="")L.push(""); L.push("Owner: "+x.o.name); L.push(""); lastO=x.o; }
+    const r=unitPayLines(x.u,N,null); r.L.forEach(z=>L.push(z)); L.push(""); total+=r.amt; });
+  while(L.length&&L[L.length-1]==="")L.pop();
+  if(list.length>1){ L.push(""); L.push("TOTAL: "+fmt(total)+" EGP"); }
+  return L.join("\n"); }
+// السطر اللي بيظهر في الكارت المفتوح (بس لو فيه أكتر من وحدة)
+function allUnitsBar(key,label){
+  const N=groupMonths(key); const list=groupUnits(key,N); if(list.length<2) return "";
+  const total=list.reduce((s2,x)=>s2+x.amt,0); const ck="all:"+key;
+  return '<div class="mx-3 my-2 rounded-xl border border-stone-300 bg-stone-50 p-2.5">'+
+    '<div class="flex items-center justify-between gap-2"><span class="text-[11.5px] font-bold text-stone-700 truncate">'+esc(label)+' <span class="font-normal text-stone-400">('+unitsWord(list.length)+')</span></span>'+
+      '<span class="shrink-0 inline-flex items-center rounded-lg border border-stone-300 bg-white overflow-hidden">'+
+        '<button data-act="allM" data-key="'+esc(key)+'" data-d="-1" class="px-2.5 py-1 text-stone-500 active:bg-stone-100">'+icon("minus",13)+'</button>'+
+        '<span class="px-1.5 text-[12px] font-bold min-w-[58px] text-center">'+monthsWord(N)+'</span>'+
+        '<button data-act="allM" data-key="'+esc(key)+'" data-d="1" class="px-2.5 py-1 text-stone-500 active:bg-stone-100">'+icon("plus",13)+'</button></span></div>'+
+    '<div class="flex items-center justify-between gap-2 mt-2"><span class="text-[15px] font-bold tnum">'+fmt(total)+cur()+'</span>'+
+      '<span class="shrink-0 inline-flex items-center gap-1.5">'+
+        '<button data-act="allCopy" data-key="'+esc(key)+'" class="inline-flex items-center gap-1 rounded-xl border px-2.5 py-1.5 text-[11px] font-bold '+(state.copied===ck?'border-emerald-300 bg-emerald-50 text-emerald-700':'border-stone-300 bg-white text-stone-700')+'">'+icon(state.copied===ck?"check":"copy",12)+(state.copied===ck?' اتنسخ':' نسخ الوحدات')+'</button>'+
+        '<button data-act="allPay" data-key="'+esc(key)+'" class="inline-flex items-center gap-1 rounded-xl bg-stone-500 text-white px-3 py-1.5 text-[11px] font-bold active:scale-[0.97]">'+icon("banknote",12)+' سداد الكل</button>'+
+      '</span></div></div>';
+}
+// نافذة سداد كل الوحدات مع بعض
+function groupPayModal(q){
+  const list=groupUnits(q.gkey,q.months); const total=list.reduce((s2,x)=>s2+x.amt,0);
+  const own=groupOwners(q.gkey); const isBen=String(q.gkey).indexOf("ben:")===0;
+  const title=isBen?(own[0]?benLabel(own[0]):"مستفيد"):(own[0]?own[0].name:"");
+  const multiO=own.length>1;
+  const srcBtn=(v)=>'<button data-act="qpSrc" data-s="'+esc(v)+'" class="flex-1 rounded-lg border px-1 py-1.5 text-[11px] font-semibold '+(q.source===v?"bg-stone-500 text-white border-stone-500":"bg-white text-stone-600 border-stone-200")+'">'+esc(v)+'</button>';
+  const rows=list.map(x=>'<div class="px-2.5 py-1.5 flex items-center justify-between gap-2"><span class="min-w-0"><span class="block text-[12px] font-semibold text-stone-800 truncate"><bdi dir="ltr">'+esc([x.u.project,(norm(x.u.block)+norm(x.u.bldg)),x.u.apt].filter(Boolean).join(" "))+'</bdi></span>'+
+      '<span class="block text-[10px] text-stone-500 truncate">'+(multiO?('باسم: '+esc(x.o.name)+' · '):'')+(x.b.lines.length?periodAr(x.b.lines[0].from,x.b.lines[x.b.lines.length-1].to):'')+(x.b.hasEstimated?' · <span class="text-orange-600">تقديري</span>':'')+'</span></span>'+
+      '<b class="tnum text-[12.5px] shrink-0">'+fmt(x.amt)+'</b></div>').join("");
+  return '<div class="fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center p-4" data-qp-backdrop="1">'+
+    '<div class="w-full max-w-sm max-h-[92vh] overflow-y-auto rounded-3xl bg-white shadow-2xl" data-qp-panel="1">'+
+      '<div class="px-4 py-3 border-b border-stone-100 flex items-start justify-between gap-2">'+
+        '<div class="min-w-0"><div class="font-bold text-sm truncate">'+esc(title)+'</div>'+
+          '<div class="text-[10px] text-stone-400 truncate">سداد '+(isBen?'كل وحدات المستفيد':'كل وحدات المالك')+' · '+unitsWord(list.length)+'</div></div>'+
+        '<button data-act="qpClose" class="w-8 h-8 shrink-0 rounded-full bg-stone-100 text-stone-500 text-lg leading-none">×</button>'+
+      '</div>'+
+      '<div class="p-4 space-y-3">'+
+        '<div><label class="block text-[11px] text-stone-500 mb-1">عدد الشهور لكل وحدة</label>'+
+          '<div class="flex items-center gap-2">'+
+            '<button data-act="qpM" data-d="-1" class="w-10 h-10 rounded-xl border border-stone-300 bg-white text-lg font-bold">−</button>'+
+            '<span class="flex-1 text-center text-lg font-bold">'+monthsWord(q.months)+'</span>'+
+            '<button data-act="qpM" data-d="1" class="w-10 h-10 rounded-xl border border-stone-300 bg-white text-lg font-bold">+</button></div></div>'+
+        '<div class="rounded-xl border border-stone-200 divide-y divide-stone-100">'+(rows||'<div class="px-3 py-3 text-center text-[11px] text-stone-400">مفيش مستحقات.</div>')+'</div>'+
+        '<div class="flex items-center justify-between rounded-xl bg-stone-600 text-white px-3 py-2.5"><span class="text-[11px] text-stone-200">الإجمالي</span><span class="text-xl font-bold tnum">'+fmt(total)+'<span class="text-[0.55em] font-medium opacity-60 mr-1">ج.م</span></span></div>'+
+        '<div><label class="block text-[11px] text-stone-500 mb-1">تاريخ السداد</label>'+
+          '<input id="qp-date" type="date" value="'+ymdToInput(q.date)+'" dir="ltr" class="w-full rounded-xl border border-stone-300 px-2 py-2 text-[12px]"/></div>'+
+        '<div><label class="block text-[11px] text-stone-500 mb-1">المصدر</label>'+
+          '<div class="flex gap-1.5">'+srcBtn("CIB OSOOL")+srcBtn("Mr. Feras")+srcBtn("Other")+'</div>'+
+          (q.source==="Other"?'<input id="qp-other" value="'+esc(q.sourceOther||"")+'" placeholder="اكتب المصدر" class="w-full mt-1.5 rounded-xl border border-stone-300 px-2 py-2 text-[12px]"/>':"")+
+        '</div>'+
+      '</div>'+
+      '<div class="px-4 pb-3"><button data-act="qpCopy" class="w-full inline-flex items-center justify-center gap-1.5 rounded-xl border py-2 text-[12px] font-semibold '+(state.copied==="qp"?'border-emerald-300 bg-emerald-50 text-emerald-700':'border-stone-300 bg-white text-stone-700')+'">'+icon(state.copied==="qp"?"check":"copy",14)+(state.copied==="qp"?' اتنسخ':' نسخ الوحدات ('+monthsWord(q.months)+')')+'</button></div>'+
+      '<div class="p-4 pt-0 flex gap-2">'+
+        '<button data-act="qpClose" class="flex-1 rounded-2xl border border-stone-300 bg-white py-3 text-sm font-semibold text-stone-600">إلغاء</button>'+
+        '<button data-act="qpConfirm" class="flex-1 rounded-2xl bg-emerald-600 text-white py-3 text-sm font-bold">تأكيد السداد</button>'+
+      '</div></div></div>';
+}
 // رسالة عائمة تحت (بعد السداد) فيها زرار نسخ اللي اتسدد
 function showToast(msg,text){ const id=Date.now(); state.toast={id,msg,text,copied:false}; setTimeout(function(){ if(state.toast&&state.toast.id===id){ state.toast=null; render(); } },12000); }
 function toastHTML(){ const t=state.toast; if(!t) return "";
@@ -1635,6 +1700,7 @@ function ownerCard(g,m){
         (remMonths?(lastPay?' — ':'')+'المعروض تحت <b>استحقاق تاني</b> ('+remMonths+' شهر متأخر لسه)':(lastPay?' — مفيش متأخر باقي':""))+
       '</div>':"")+
       (stepperRow?'<div class="px-3.5">'+stepperRow+'</div>':"")+
+      (m.collect?"":allUnitsBar(o.key,"كل وحدات المالك"))+
       '<div class="divide-y divide-stone-100">'+rows+'</div>'
     ) : "";
 
@@ -1671,8 +1737,8 @@ function paneHTML(data,m){
     '<div class="flex items-center gap-2 shrink-0"><div class="text-left"><div class="text-[10px] text-stone-400">المطلوب تحويله</div><div class="text-[20px] font-bold tnum leading-tight">'+fmt(total)+cur()+'</div></div>'+
       '<button data-act="paneClose" class="w-8 h-8 rounded-full bg-stone-100 text-stone-500 grid place-items-center" title="قفل">'+icon("x",15)+'</button></div></div>';
   const bank='<div class="p-3 grid grid-cols-2 gap-1.5 border-b border-stone-100">'+ownerBankFields(o)+'</div>';
-  const units=rows.length?'<div class="px-4 pt-3 text-[12px] font-bold text-stone-600">الدفعات المستحقة</div><div class="divide-y divide-stone-100">'+unitRowsHTML(rows,m)+'</div>':
-    '<div class="px-4 py-6 text-center text-[12px] text-stone-400">مفيش مستحقات للمالك ده في المدة المختارة.</div>';
+  const units=allUnitsBar(o.key,"كل وحدات المالك")+(rows.length?'<div class="px-4 pt-3 text-[12px] font-bold text-stone-600">الدفعات المستحقة</div><div class="divide-y divide-stone-100">'+unitRowsHTML(rows,m)+'</div>':
+    '<div class="px-4 py-6 text-center text-[12px] text-stone-400">مفيش مستحقات للمالك ده في المدة المختارة.</div>');
   const acts='<div class="p-3 flex gap-2 border-t border-stone-100">'+
     '<button data-act="printOwner" data-key="'+esc(o.key)+'" class="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl border border-stone-300 py-2 text-[12px] font-semibold text-stone-700">'+icon("printer",14)+' ورقة المالك</button>'+
     '<button data-act="openOwner" data-key="'+esc(o.key)+'" data-from="main" data-full="1" class="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl border border-stone-300 py-2 text-[12px] font-semibold text-stone-700">'+icon("user",14)+' صفحة المالك كاملة</button></div>';
@@ -1702,6 +1768,7 @@ function benCard(c,m){
   // مقفول: سطر لكل وحدة (باسم مين + الإجمالي) — مفتوح: الدفعات كاملة بزرار السداد تحت اسم كل مالك
   const body=isE?(
       '<div class="px-3 py-2.5 bg-stone-50/70 border-t border-stone-100 space-y-1.5">'+ownerBankFields(o0)+'</div>'+
+      allUnitsBar(c.key,"كل وحدات المستفيد")+
       c.groups.map(g=>'<div class="px-3.5 py-1.5 bg-stone-50 border-t border-stone-100 flex items-center justify-between gap-2 text-[11px]">'+
           '<span class="font-bold text-stone-700 truncate">باسم: '+esc(g.o.name)+'</span>'+
           '<span class="shrink-0 inline-flex items-center gap-1.5"><b class="tnum">'+fmt(g.subtotal)+'</b>'+
@@ -1812,6 +1879,7 @@ function increaseAlertHTML(u){
 // ===== نافذة السداد المباشر =====
 function quickPayModal(){
   const q=state.quickPay; if(!q) return "";
+  if(q.group) return groupPayModal(q);
   const f=findUnit(q.code); if(!f) return "";
   const u=f.u, o=f.o;
   const b=unitMonthsBreakdown(u,q.months);
@@ -3589,6 +3657,12 @@ function handleClick(e){
     state.flash="اتسجّل سداد "+n+" وحدة بإجمالي "+fmt(total)+" ج.م"+(anyLeft?(" ⚠️ فيه "+fmt(anyLeft)+" فائض ما اترحّلش."):" ✓");
     render(); }
   else if(act==="qpClose"){ state.quickPay=null; render(); }
+  else if(act==="allM"){ const m2=ensureMain(); const k=t.dataset.key; const d=parseInt(t.dataset.d,10)||0; m2.ownerMonths=m2.ownerMonths||{}; m2.ownerMonths[k]=Math.max(1,groupMonths(k)+d); save(); render(); }
+  else if(act==="allCopy"){ const k=t.dataset.key; copyText(groupUnitsText(k,groupMonths(k))).then(ok=>{ if(ok) flashCopied("all:"+k); else { state.flash="تعذّر النسخ"; render(); } }); }
+  else if(act==="allPay"){ const k=t.dataset.key; const m2=ensureMain();
+    state.quickPay={group:true,gkey:k,months:groupMonths(k),date:m2.payDate||todayYmd(),source:m2.source||"CIB OSOOL",sourceOther:m2.sourceOther||""}; render(); }
+  else if(act==="qpCopy" && state.quickPay && state.quickPay.group){ const q=state.quickPay; qpSync();
+    copyText(groupUnitsText(q.gkey,q.months)).then(ok=>{ if(ok) flashCopied("qp"); else { state.flash="تعذّر النسخ"; render(); } }); }
   else if(act==="qpCopy"){ const q=state.quickPay; if(!q)return; qpSync(); const f=findUnit(q.code); if(!f)return;
     copyText(unitPayText(f.o,f.u,q.months,q.amount)).then(ok=>{ if(ok) flashCopied("qp"); else { state.flash="تعذّر النسخ"; render(); } }); }
   else if(act==="copyTr"){ const o=state.owners.find(x=>x.key===t.dataset.key); if(!o)return;
@@ -3597,6 +3671,20 @@ function handleClick(e){
     copyText(r.text).then(ok=>{ if(ok) flashCopied("bulk"); else { state.flash="تعذّر النسخ"; render(); } }); }
   else if(act==="toastCopy"){ const tt=state.toast; if(!tt||!tt.text)return; copyText(tt.text).then(ok=>{ if(ok&&state.toast===tt){ tt.copied=true; render(); } }); }
   else if(act==="toastClose"){ state.toast=null; render(); }
+  else if(act==="qpM" && state.quickPay && state.quickPay.group){ const q=state.quickPay; qpSync();
+    const d=parseInt(t.dataset.d,10)||0; q.months=Math.max(1,q.months+d);
+    const m2=ensureMain(); m2.ownerMonths=m2.ownerMonths||{}; m2.ownerMonths[q.gkey]=q.months; render(); }
+  else if(act==="qpConfirm" && state.quickPay && state.quickPay.group){ const q=state.quickPay; qpSync();
+    const list=groupUnits(q.gkey,q.months); if(!list.length){ state.quickPay=null; state.flash="مفيش مستحقات."; render(); return; }
+    const paidText=groupUnitsText(q.gkey,q.months);        // قبل التسجيل
+    const note=(q.source==="Other")?(q.sourceOther||""):""; let total=0, left=0;
+    list.forEach(x=>{ recordPayment(x.u, x.amt, q.date, q.source, note); total+=x.amt;
+      const p=(x.u.payments||[])[x.u.payments.length-1]; if(p&&p.leftover>0) left+=p.leftover; });
+    computeAll(); markChange(list.length); save();
+    state.quickPay=null;
+    if(left>0) state.flash="⚠️ فيه "+fmt(left)+" فائض ما اترحّلش — راجع جدول الوحدات.";
+    showToast("اتسجّل سداد "+unitsWord(list.length)+" بإجمالي "+fmt(total)+" ج.م ✓", paidText);
+    render(); }
   else if(act==="qpM"){ const q=state.quickPay; if(!q)return; qpSync();
     const d=parseInt(t.dataset.d,10)||0; q.months=Math.max(1,q.months+d);
     const f=findUnit(q.code); if(f) q.amount=Math.round(dueAmount(f.u,q.months));
