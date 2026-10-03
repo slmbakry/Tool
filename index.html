@@ -793,18 +793,19 @@ function groupUnitsText(key,N){ const list=groupUnits(key,N); const L=[]; let to
   return L.join("\n"); }
 // السطر اللي بيظهر في الكارت المفتوح (بس لو فيه أكتر من وحدة)
 function allUnitsBar(key,label){
-  const N=groupMonths(key); const list=groupUnits(key,N); if(list.length<2) return "";
+  const N=groupMonths(key); const list=groupUnits(key,N); if(!list.length) return "";
+  const one=list.length===1;
   const total=list.reduce((s2,x)=>s2+x.amt,0); const ck="all:"+key;
   return '<div class="mx-3 my-2 rounded-xl border border-stone-300 bg-stone-50 p-2.5">'+
-    '<div class="flex items-center justify-between gap-2"><span class="text-[11.5px] font-bold text-stone-700 truncate">'+esc(label)+' <span class="font-normal text-stone-400">('+unitsWord(list.length)+')</span></span>'+
+    '<div class="flex items-center justify-between gap-2"><span class="text-[11.5px] font-bold text-stone-700 truncate">'+esc(one?label.replace("كل وحدات","وحدة"):label)+(one?'':' <span class="font-normal text-stone-400">('+unitsWord(list.length)+')</span>')+'</span>'+
       '<span class="shrink-0 inline-flex items-center rounded-lg border border-stone-300 bg-white overflow-hidden">'+
         '<button data-act="allM" data-key="'+esc(key)+'" data-d="-1" class="px-2.5 py-1 text-stone-500 active:bg-stone-100">'+icon("minus",13)+'</button>'+
         '<span class="px-1.5 text-[12px] font-bold min-w-[58px] text-center">'+monthsWord(N)+'</span>'+
         '<button data-act="allM" data-key="'+esc(key)+'" data-d="1" class="px-2.5 py-1 text-stone-500 active:bg-stone-100">'+icon("plus",13)+'</button></span></div>'+
     '<div class="flex items-center justify-between gap-2 mt-2"><span class="text-[15px] font-bold tnum">'+fmt(total)+cur()+'</span>'+
       '<span class="shrink-0 inline-flex items-center gap-1.5">'+
-        '<button data-act="allCopy" data-key="'+esc(key)+'" class="inline-flex items-center gap-1 rounded-xl border px-2.5 py-1.5 text-[11px] font-bold '+(state.copied===ck?'border-emerald-300 bg-emerald-50 text-emerald-700':'border-stone-300 bg-white text-stone-700')+'">'+icon(state.copied===ck?"check":"copy",12)+(state.copied===ck?' اتنسخ':' نسخ الوحدات')+'</button>'+
-        '<button data-act="allPay" data-key="'+esc(key)+'" class="inline-flex items-center gap-1 rounded-xl bg-stone-500 text-white px-3 py-1.5 text-[11px] font-bold active:scale-[0.97]">'+icon("banknote",12)+' سداد الكل</button>'+
+        '<button data-act="allCopy" data-key="'+esc(key)+'" class="inline-flex items-center gap-1 rounded-xl border px-2.5 py-1.5 text-[11px] font-bold '+(state.copied===ck?'border-emerald-300 bg-emerald-50 text-emerald-700':'border-stone-300 bg-white text-stone-700')+'">'+icon(state.copied===ck?"check":"copy",12)+(state.copied===ck?' اتنسخ':(one?' نسخ الوحدة':' نسخ الوحدات'))+'</button>'+
+        '<button data-act="allPay" data-key="'+esc(key)+'" class="inline-flex items-center gap-1 rounded-xl bg-stone-500 text-white px-3 py-1.5 text-[11px] font-bold active:scale-[0.97]">'+icon("banknote",12)+(one?' سداد':' سداد الكل')+'</button>'+
       '</span></div></div>';
 }
 // نافذة سداد كل الوحدات مع بعض
@@ -929,7 +930,7 @@ function removePayment(u,id){
 const state={owners:[],meta:null,view:"main",owner:null,unit:null,query:"",compounds:null,err:"",copied:null,pending:null,clearAsk:false,bulk:null,flash:"",report:null,tagModes:{},tagFilter:null,editing:false,draft:null,keepEdits:true,repCompound:null,repMonthIdx:null,repSort:"desc",repBeds:null,backup:{lastAt:null,changes:0},bkSnooze:false};
 
 // رقم الإصدار: بيتغيّر مع كل تحديث — ظاهر فوق في الهيدر عشان تتأكد إن النسخة الجديدة اشتغلت
-const BUILD="2026-10-03 11:05";
+const BUILD="2026-10-03 11:10";
 const AUTO_KEY=APP_ID+":auto", BACKUP_DAYS=7, BACKUP_CHANGES=20;
 function load(){try{const raw=localStorage.getItem(STORAGE_KEY);if(raw){const p=JSON.parse(raw);
   state.owners=p.owners||[];state.meta=p.meta||null;state.tagModes=p.tagModes||{};state.backup=p.backup||{lastAt:null,changes:0};
