@@ -982,7 +982,7 @@ function removePayment(u,id){
 const state={owners:[],meta:null,view:"main",owner:null,unit:null,query:"",compounds:null,err:"",copied:null,pending:null,clearAsk:false,bulk:null,flash:"",report:null,tagModes:{},tagFilter:null,editing:false,draft:null,keepEdits:true,repCompound:null,repMonthIdx:null,repSort:"desc",repBeds:null,backup:{lastAt:null,changes:0},bkSnooze:false};
 
 // رقم الإصدار: بيتغيّر مع كل تحديث — ظاهر فوق في الهيدر عشان تتأكد إن النسخة الجديدة اشتغلت
-const BUILD="2026-10-04 13:40";
+const BUILD="2026-10-04 17:40";
 const AUTO_KEY=APP_ID+":auto", BACKUP_DAYS=7, BACKUP_CHANGES=20;
 function load(){try{const raw=localStorage.getItem(STORAGE_KEY);if(raw){const p=JSON.parse(raw);
   state.owners=p.owners||[];state.meta=p.meta||null;state.tagModes=p.tagModes||{};state.backup=p.backup||{lastAt:null,changes:0};
@@ -1632,8 +1632,8 @@ function viewMain(){
     { const ns=stuckPayments().length; if(ns) alerts.push({t:ns+" دفعة فيها فائض",c:"text-red-700 bg-red-50 border-red-300",a:"openStuck"}); }
     { const nr=anchorReviews().length; if(nr) alerts.push({t:nr+" حالة محتاجة مراجعة",c:"text-red-700 bg-red-50 border-red-200",a:"openReview"}); }
     { let nn=0; state.owners.forEach(o=>o.units.forEach(u=>{ nn+=((u._c&&u._c.alerts)||[]).length; })); if(nn) alerts.push({t:nn+" ملاحظة على البيانات",c:"text-orange-700 bg-orange-50 border-orange-200",a:"openNotes"}); }
-    return '<aside class="hidden lg:block w-72 shrink-0">'+
-      '<div class="sticky top-[104px] space-y-2.5">'+
+    return '<aside class="hidden lg:block w-72 shrink-0 lg:self-stretch">'+
+      '<div id="paneBox" class="sticky space-y-2.5" style="top:196px">'+
         '<div class="rounded-2xl border border-stone-200 bg-white p-3.5 shadow-sm">'+
           '<div class="text-[11px] text-stone-500 mb-1">إجمالي المدة</div>'+
           '<div class="text-2xl font-extrabold text-stone-900 tabular-nums">'+fmt(total)+'</div>'+
@@ -1771,7 +1771,23 @@ function paneValid(data){ const p=state.pane; if(!p) return false;
   if(p.type==="owner") return state.owners.some(o=>o.key===p.key);
   if(p.type==="unit") return !!findUnit(p.code);
   return false; }
-function paneWrap(inner){ return '<aside id="pane" class="hidden lg:block flex-1 min-w-0"><div class="sticky top-[196px] max-h-[calc(100vh-206px)] overflow-y-auto rounded-2xl pb-2">'+inner+'</div></aside>'; }
+// اللوحة الجانبية: بطولها الكامل من غير سكرول داخلي، وبتتحرك مع سكرول الصفحة (paneStick)
+function paneWrap(inner){ return '<aside id="pane" class="hidden lg:block flex-1 min-w-0 lg:self-stretch"><div id="paneBox" class="sticky rounded-2xl pb-2" style="top:196px">'+inner+'</div></aside>'; }
+// لوحة لازقة في الاتجاهين: نازل ← بتطلع لحد ما آخرها يبان وتثبت، طالع ← بتنزل لحد ما أولها يبان وتثبت
+let _paneTop=null,_paneKey=null,_paneY=0;
+function paneStick(reset){
+  const box=document.getElementById("paneBox"); if(!box||!isDesk()) return;
+  // أعلى مكان = تحت الشريط الثابت كله (الهيدر + شريط الأزرار والبحث)
+  const ab=document.querySelector(".appbar"), tb=document.querySelector(".maintb");
+  const maxTop=(ab?Math.round(ab.getBoundingClientRect().height):60)+(tb?tb.offsetHeight:0)+12;
+  const minTop=Math.min(maxTop,window.innerHeight-box.offsetHeight-12);
+  const y=window.scrollY||0;
+  if(reset||_paneTop==null) _paneTop=maxTop; else _paneTop=Math.max(minTop,Math.min(maxTop,_paneTop-(y-_paneY)));
+  _paneY=y; box.style.top=_paneTop+"px";
+}
+function paneStickAfterRender(){ const p=state.pane; const key=((state.view==="main"||!state.view)&&p)?(p.type+":"+(p.key||p.code)):"side"; paneStick(key!==_paneKey); _paneKey=key; }
+window.addEventListener("scroll",function(){ paneStick(false); },{passive:true});
+window.addEventListener("resize",function(){ paneStick(false); });
 function paneHTML(data,m){
   const p=state.pane;
   if(p.type==="unit"){
@@ -3406,7 +3422,7 @@ function render(){
   html+=toastHTML();
   paint(html);
   renderBNav();
-  fitRows(); fitShrink();
+  fitRows(); fitShrink(); paneStickAfterRender();
 }
 // يخفي آخر اختيارات التاريخ اللي مش مكفّيها السطر (غير المختار) لحد ما السطر يكفي
 function fitRows(){
