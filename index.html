@@ -982,7 +982,7 @@ function removePayment(u,id){
 const state={owners:[],meta:null,view:"main",owner:null,unit:null,query:"",compounds:null,err:"",copied:null,pending:null,clearAsk:false,bulk:null,flash:"",report:null,tagModes:{},tagFilter:null,editing:false,draft:null,keepEdits:true,repCompound:null,repMonthIdx:null,repSort:"desc",repBeds:null,backup:{lastAt:null,changes:0},bkSnooze:false};
 
 // رقم الإصدار: بيتغيّر مع كل تحديث — ظاهر فوق في الهيدر عشان تتأكد إن النسخة الجديدة اشتغلت
-const BUILD="2026-10-04 13:20";
+const BUILD="2026-10-04 13:40";
 const AUTO_KEY=APP_ID+":auto", BACKUP_DAYS=7, BACKUP_CHANGES=20;
 function load(){try{const raw=localStorage.getItem(STORAGE_KEY);if(raw){const p=JSON.parse(raw);
   state.owners=p.owners||[];state.meta=p.meta||null;state.tagModes=p.tagModes||{};state.backup=p.backup||{lastAt:null,changes:0};
@@ -1854,6 +1854,28 @@ function collectRow(u,ownerKey,amt,checked,months){
     '</div>'+
     (per?'<div class="mt-1.5 pr-7">'+per+'</div>':"")+
     '</div>';
+}
+// ===== خيارات الطباعة: التقرير الكامل / الكشف الإجمالي فقط / الكشف التفصيلي فقط =====
+// كشف المستفيد المعزول مالوش كشف إجمالي، فبيتطبع على طول من غير سؤال
+function pdfChoiceNeeded(){ const r=state.report; if(!r) return false; let data; try{ data=buildReport(); }catch(e){ return false; }
+  if(!data.length) return false; return !(r.benKey && data.every(g=>benKey(g.o)===r.benKey)); }
+function pdfChoiceModal(){
+  if(!state.pdfAsk) return ""; const r=state.report||{}; let n=0; try{ n=buildReport().length; }catch(e){}
+  const rng=(r.from||r.to)?((r.from?'من <bdi dir="ltr">'+fmtDate(r.from)+'</bdi> ':'')+(r.to?'حتى <bdi dir="ltr">'+fmtDate(r.to)+'</bdi>':'')):'كل المستحقات';
+  const opt=(m,t,d,main)=>'<button data-act="pdfGo" data-m="'+m+'" class="w-full text-right rounded-2xl border '+(main?'border-stone-400 bg-stone-50':'border-stone-200 bg-white')+' p-3 flex items-center justify-between gap-3 active:scale-[0.99]">'+
+    '<span class="min-w-0"><span class="block text-[13px] font-bold text-stone-800">'+t+'</span><span class="block text-[11px] text-stone-500 mt-0.5">'+d+'</span></span>'+
+    '<span class="shrink-0 text-stone-400">'+icon("printer",15)+'</span></button>';
+  return '<div class="fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center p-4" data-pdf-backdrop="1">'+
+    '<div class="w-full max-w-sm rounded-3xl bg-white shadow-2xl overflow-hidden">'+
+      '<div class="px-4 py-3 border-b border-stone-100 flex items-start justify-between gap-2">'+
+        '<div class="min-w-0"><div class="font-bold text-sm">خيارات الطباعة</div>'+
+          '<div class="text-[11px] text-stone-500 mt-0.5">'+ownersWord(n)+' · '+rng+'</div></div>'+
+        '<button data-act="pdfClose" class="w-8 h-8 shrink-0 rounded-full bg-stone-100 text-stone-500 text-lg leading-none">×</button></div>'+
+      '<div class="p-4 space-y-2">'+
+        opt("all","التقرير الكامل","الكشف الإجمالي ثم الكشوف التفصيلية للملاك",true)+
+        opt("sum","الكشف الإجمالي فقط","ملخص مستحقات الملاك في جدول واحد",false)+
+        opt("det","الكشف التفصيلي فقط","كشف مستقل لكل مالك ببيانات التحويل",false)+
+      '</div></div></div>';
 }
 // ===== وحدة واحدة = زرار سداد واحد + الأقساط سطور خفيفة تحته =====
 function unitRowsHTML(rows,m,barKey){
@@ -3021,7 +3043,7 @@ function ownerDocSection(o){
       '<button data-act="copyUnits" data-key="'+esc(o.key)+'" class="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl border border-stone-200 py-2 text-xs font-medium active:scale-[0.99]">'+icon("home",13)+' نسخ الوحدات والقيم</button>'+
     '</div></div>';
 }
-function printReport(){
+function printReport(mode){
   const data=buildReport(); if(!data.length){alert("مفيش بيانات في المدة دي.");return;}
   const ds=a=>a?(String(a.d).padStart(2,"0")+"/"+String(a.m).padStart(2,"0")+"/"+a.y):"";
   const r=state.report; const rangeTxt=(r.from||r.to)?((r.from?ds(r.from):"البداية")+" — "+(r.to?ds(r.to):"النهاية")):"كل المستحقات";
@@ -3081,7 +3103,7 @@ function printReport(){
           "<td class='num'>"+fmt(perM)+partNote+"</td>"+
           "<td style='text-align:center'>"+p.months+"</td>"+
           "<td class='num'>"+fmt(p.amount)+"</td></tr>"; }); });
-    return "<div class='sec' id='own"+seq+"'><div class='sec-h'><span><a href='#summary' class='seqb' title='رجوع للكشف المختصر'>"+seq+"</a> "+esc(c.label)+" <span style='font-weight:400;font-size:9.5px;color:#78716c'>(مستفيد)</span></span><span class='v'>"+fmt(c.subtotal)+" ج.م</span></div>"+
+    return "<div class='sec' id='own"+seq+"'><div class='sec-h'><span><a href='#summary' class='seqb' title='رجوع للكشف الإجمالي'>"+seq+"</a> "+esc(c.label)+" <span style='font-weight:400;font-size:9.5px;color:#78716c'>(مستفيد)</span></span><span class='v'>"+fmt(c.subtotal)+" ج.م</span></div>"+
       (bankLine?"<div class='sec-sub'>"+esc(bankLine)+"</div>":"")+
       "<div class='sec-sub'>تحويل واحد يشمل "+ownersWord(c.groups.length)+" · "+nPay+" دفعة</div>"+
       "<table style='table-layout:fixed'><colgroup><col style='width:13%'><col style='width:37%'><col style='width:17%'><col style='width:8%'><col style='width:25%'></colgroup>"+
@@ -3118,7 +3140,7 @@ function printReport(){
     const boxes="<div class='rbx'><div class='rb'><div class='rl'>مسدد حتى</div>"+(sameSt?"<div class='rv' dir='ltr'>"+stV[0].t+"</div>":
       "<div class='rvl'>"+stV.map(v=>"<div><b>"+esc([(norm(v.u.block)+norm(v.u.bldg)),v.u.apt].filter(Boolean).join(" "))+"</b> — <bdi dir='ltr'>"+v.t+"</bdi></div>").join("")+"</div>")+"</div>"+
       (incT>0?"<div class='rb rw'><div class='rl'>⚠ فروق زيادة غير مسددة</div><div class='rv'>"+fmt(incT)+"</div><div class='rvl'>"+incLines.join("<br>")+"</div></div>":"")+"</div>";
-    body+="<div class='sec' id='own"+seq+"'><div class='sec-h'><span><a href='#summary' class='seqb' title='رجوع للكشف المختصر'>"+seq+"</a> "+esc(g.o.name)+"</span><span class='v'>"+fmt(g.subtotal)+" ج.م</span></div>"+(bank?"<div class='sec-sub'>"+esc(bank)+"</div>":"")+boxes+
+    body+="<div class='sec' id='own"+seq+"'><div class='sec-h'><span><a href='#summary' class='seqb' title='رجوع للكشف الإجمالي'>"+seq+"</a> "+esc(g.o.name)+"</span><span class='v'>"+fmt(g.subtotal)+" ج.م</span></div>"+(bank?"<div class='sec-sub'>"+esc(bank)+"</div>":"")+boxes+
       "<table style='table-layout:fixed'><colgroup><col style='width:13%'><col style='width:37%'><col style='width:17%'><col style='width:8%'><col style='width:25%'></colgroup>"+
       "<thead><tr><th>الاستحقاق</th><th>الوحدة</th><th class='num'>سعر الشهر</th><th style='text-align:center'>شهور</th><th class='num'>الإجمالي</th></tr></thead><tbody>"+rws+"</tbody></table></div>";
   });
@@ -3158,15 +3180,17 @@ function printReport(){
       "<td class='dcol'>"+toCell+"</td>"+
       "<td class='rcol'>"+rateCell+"</td>"+
       "<td class='num'>"+fmt(g.subtotal)+"</td></tr>"; });
-  const summary=benMode?"":"<div class='sec sumsec' id='summary'><div class='sec-h'><span>كشف مختصر بالملاك <span style='font-weight:400;font-size:9.5px;color:#78716c'>(مرتّب بميعاد الاستحقاق)</span></span><span class='v'>"+data.length+" مالك</span></div>"+
+  const summary=benMode?"":"<div class='sec sumsec' id='summary'><div class='sec-h'><span>الكشف الإجمالي للملاك <span style='font-weight:400;font-size:9.5px;color:#78716c'>(مرتّب بميعاد الاستحقاق)</span></span><span class='v'>"+data.length+" مالك</span></div>"+
     "<table class='smt' style='table-layout:fixed'><colgroup><col style='width:5%'><col style='width:23%'><col style='width:19%'><col style='width:12%'><col style='width:12%'><col style='width:15%'><col style='width:14%'></colgroup>"+
     "<thead><tr><th>#</th><th>المالك</th><th>الوحدة</th><th>الاستحقاق</th><th>مغطى حتى</th><th class='num'>الإيجار الشهري</th><th class='num'>الإجمالي</th></tr></thead>"+
     "<tbody>"+sumRows+"</tbody>"+
     "<tfoot><tr class='gt'><td colspan='6'>الإجمالي العام</td><td class='num'>"+fmt(grand)+"</td></tr></tfoot></table>"+
-    "<div class='hint'>اضغط رقم المالك أو اسمه للانتقال لتفاصيله · واضغط الرقم في التفاصيل للرجوع هنا</div></div>"+
-    "<div class='pgbrk'></div>";
-  const body2="<div class='totbar'><span>الإجمالي العام · "+data.length+" مالك</span><span class='v'>"+fmt(grand)+" ج.م</span></div>"+summary+body;
-  openPrint(reportShell("تقرير المستحقات للتحويل","المدة: "+rangeTxt,body2));
+    (mode==="sum"?"":"<div class='hint'>اضغط رقم المالك أو اسمه للانتقال لتفاصيله · واضغط الرقم في التفاصيل للرجوع هنا</div>")+"</div>"+
+    (mode==="sum"?"":"<div class='pgbrk'></div>");
+  // خيارات الطباعة: التقرير الكامل (الافتراضي) · الكشف الإجمالي فقط · الكشف التفصيلي فقط
+  const only=benMode?null:(mode==="sum"||mode==="det"?mode:null);
+  const body2="<div class='totbar'><span>الإجمالي العام · "+data.length+" مالك</span><span class='v'>"+fmt(grand)+" ج.م</span></div>"+(only==="det"?"":summary)+(only==="sum"?"":body);
+  openPrint(reportShell("تقرير المستحقات للتحويل"+(only==="sum"?" — الكشف الإجمالي":only==="det"?" — الكشف التفصيلي":""),"المدة: "+rangeTxt,body2));
 }
 
 
@@ -3378,6 +3402,7 @@ function render(){
   }
   if(state.updateAvail){ html='<div class="mb-3 flex items-center justify-between gap-2 rounded-xl bg-stone-800 text-white px-3 py-2.5"><span class="text-[12px] leading-snug">فيه نسخة أحدث من الأداة.</span><button data-act="doUpdate" class="shrink-0 rounded-lg bg-white text-stone-800 px-3 py-1.5 text-[11px] font-bold">حدّث دلوقتي</button></div>'+html; }
   if(state.quickPay) html+=quickPayModal();
+  if(state.pdfAsk) html+=pdfChoiceModal();
   html+=toastHTML();
   paint(html);
   renderBNav();
@@ -3409,7 +3434,7 @@ window.addEventListener("resize",function(){ try{fitShrink();}catch(e){} });
 function renderBNav(){
   const nav=document.getElementById("bnav"); if(!nav) return;
   const m=state.report;
-  const hide=(!SB.signedIn&&!state.localOnly)||state.pending||state.clearAsk||!state.owners.length||state.quickPay||
+  const hide=(!SB.signedIn&&!state.localOnly)||state.pending||state.clearAsk||!state.owners.length||state.quickPay||state.pdfAsk||
     ((state.view==="main"||!state.view)&&m&&m.collect)||state.editing||state.editingOwner;
   if(hide){ nav.innerHTML=""; return; }
   const v=state.view||"main";
@@ -3535,6 +3560,9 @@ function handleClick(e){
   // ضغط على خلفية نافذة السداد = إغلاق
   if(state.quickPay && e.target && e.target.getAttribute && e.target.getAttribute("data-qp-backdrop")==="1"){
     state.quickPay=null; render(); return;
+  }
+  if(state.pdfAsk && e.target && e.target.getAttribute && e.target.getAttribute("data-pdf-backdrop")==="1"){
+    state.pdfAsk=false; render(); return;
   }
   const t=e.target.closest("[data-act]"); if(!t)return;
   const act=t.dataset.act;
@@ -3888,7 +3916,9 @@ function handleClick(e){
     if(m2.expanded.size>=all.length && all.length){ m2.expanded=new Set(); } else { m2.expanded=new Set(all); } render(); }
   else if(act==="rToggle"){ syncMainFromDOM(); const k=t.dataset.key; const s=ensureMain().expanded; if(s.has(k))s.delete(k); else s.add(k); render(); }
   else if(act==="rExcel"){ syncMainFromDOM(); try{exportReportExcel();}catch(e){alert("تعذّر التصدير: "+e.message);} }
-  else if(act==="rPdf"){ syncMainFromDOM(); try{printReport();}catch(e){alert("تعذّرت الطباعة: "+e.message);} }
+  else if(act==="rPdf"){ syncMainFromDOM(); if(pdfChoiceNeeded()){ state.pdfAsk=true; render(); } else { try{printReport();}catch(e){alert("تعذّرت الطباعة: "+e.message);} } }
+  else if(act==="pdfGo"){ const md=t.dataset.m; state.pdfAsk=false; render(); try{printReport(md);}catch(e){alert("تعذّرت الطباعة: "+e.message);} }
+  else if(act==="pdfClose"){ state.pdfAsk=false; render(); }
   else if(act==="demo"){loadDemo();}
   else if(act==="comp"){syncMainFromDOM();const c=t.dataset.c;const cs=compoundSet();if(cs.has(c))cs.delete(c);else cs.add(c);if(cs.size===0)state.compounds=new Set(allCompounds());render();}
   else if(act==="compToggle"){syncMainFromDOM();state.compOpen=!state.compOpen;render();}
