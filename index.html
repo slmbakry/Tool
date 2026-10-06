@@ -982,7 +982,7 @@ function removePayment(u,id){
 const state={owners:[],meta:null,view:"main",owner:null,unit:null,query:"",compounds:null,err:"",copied:null,pending:null,clearAsk:false,bulk:null,flash:"",report:null,tagModes:{},tagFilter:null,editing:false,draft:null,keepEdits:true,repCompound:null,repMonthIdx:null,repSort:"desc",repBeds:null,backup:{lastAt:null,changes:0},bkSnooze:false};
 
 // رقم الإصدار: بيتغيّر مع كل تحديث — ظاهر فوق في الهيدر عشان تتأكد إن النسخة الجديدة اشتغلت
-const BUILD="2026-10-04 17:40";
+const BUILD="2026-10-06 22:45";
 const AUTO_KEY=APP_ID+":auto", BACKUP_DAYS=7, BACKUP_CHANGES=20;
 function load(){try{const raw=localStorage.getItem(STORAGE_KEY);if(raw){const p=JSON.parse(raw);
   state.owners=p.owners||[];state.meta=p.meta||null;state.tagModes=p.tagModes||{};state.backup=p.backup||{lastAt:null,changes:0};
@@ -1733,9 +1733,9 @@ function ownerCard(g,m){
       '</div>'+
       '<div class="flex items-center justify-between gap-2 mt-1">'+
         '<span class="text-[11px] inline-flex items-center gap-1.5 truncate min-w-0">'+
-          (lastPay?'<span class="shrink-0 inline-flex items-center gap-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 text-[9px] font-bold" title="آخر سداد '+esc(fmtDate(lastPay.date))+' بمبلغ '+esc(fmt(lastPay.amount))+'">'+icon("check",9)+'اتسدد '+fmtDate(lastPay.date)+'</span><span class="text-stone-300 shrink-0">·</span>':"")+
-          '<span class="text-stone-500 shrink-0">'+(nUnits===1?"وحدة واحدة":nUnits+" وحدة")+'</span>'+
-          (bank?'<span class="text-stone-300 shrink-0">·</span><span class="text-stone-400 truncate">'+esc(bank)+'</span>':"")+
+          (lastPay?'<span class="shrink-0 inline-flex items-center gap-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 text-[9px] font-bold" title="آخر سداد '+esc(fmtDate(lastPay.date))+' بمبلغ '+esc(fmt(lastPay.amount))+'">'+icon("check",9)+'اتسدد <bdi dir="ltr">'+fmtDate(lastPay.date).slice(0,5)+'</bdi></span><span class="text-stone-300 shrink-0">·</span>':"")+
+          unitNamesHTML(g.rows)+
+          (bank?'<span class="ubs text-stone-300 shrink-0">·</span><span class="ubk text-stone-400 truncate min-w-0" style="flex-shrink:1000">'+esc(bank)+'</span>':"")+
         '</span>'+
         (nChecked?'<span class="shrink-0 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-1.5 py-0.5">✓ '+nChecked+'</span>':"")+
         (m.collect?"":'<span data-act="copyTr" data-key="'+esc(o.key)+'" data-ck="'+esc(o.key)+'" role="button" class="shrink-0 inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-[10.5px] font-semibold '+(state.copied==="tr:"+o.key?'border-emerald-300 bg-emerald-50 text-emerald-700':'border-stone-200 bg-white text-stone-600')+'">'+icon(state.copied==="tr:"+o.key?"check":"copy",11)+(state.copied==="tr:"+o.key?' اتنسخ':' التحويل')+'</span>')+
@@ -3422,9 +3422,43 @@ function render(){
   html+=toastHTML();
   paint(html);
   renderBNav();
-  fitRows(); fitShrink(); paneStickAfterRender();
+  fitRows(); fitShrink(); fitUnits(); paneStickAfterRender();
 }
 // يخفي آخر اختيارات التاريخ اللي مش مكفّيها السطر (غير المختار) لحد ما السطر يكفي
+// أسماء وحدات المالك في الكارت المقفول: اللي يكفّي في السطر بالاسم كامل، والباقي عدد (+N)
+function unitNamesHTML(rows){
+  const seen={}, us=[];
+  rows.forEach(x=>{ const u=x.u; if(seen[u.code]) return; seen[u.code]=1; us.push(u); });
+  us.sort((a,c)=>codeCmp(a.code,c.code));   // ترتيب ثابت بكود الوحدة
+  const names=us.map(u=>[u.project,(norm(u.block)+norm(u.bldg)),u.apt].filter(Boolean).join(" ")||u.code);
+  if(!names.length) return "";
+  return '<span class="unitfit inline-flex items-center gap-1 min-w-0 overflow-hidden whitespace-nowrap" title="'+esc(names.join(" · "))+'">'+
+    names.map((n,i)=>(i?'<span class="ufs text-stone-300 shrink-0">·</span>':'')+'<bdi dir="ltr" class="uf shrink-0 text-[12px] font-bold text-stone-800">'+esc(n)+'</bdi>').join("")+
+    '<span class="ufm shrink-0 rounded-full bg-stone-100 border border-stone-300 text-stone-700 px-1.5 text-[10px] font-bold leading-[15px]" dir="ltr" style="display:none"></span></span>';
+}
+function fitUnits(){
+  document.querySelectorAll(".unitfit").forEach(row=>{
+    const us=[...row.querySelectorAll(".uf")], ss=[...row.querySelectorAll(".ufs")], more=row.querySelector(".ufm");
+    const par=row.parentElement, bk=par?par.querySelector(".ubk"):null, bs=par?par.querySelector(".ubs"):null;
+    const fit=()=>{
+      us.forEach(e=>{ e.style.display=""; e.style.flexShrink=""; e.style.overflow=""; e.style.textOverflow=""; e.style.minWidth=""; }); ss.forEach(e=>{ e.style.display=""; });
+      if(more){ more.style.display="none"; more.textContent=""; }
+      let vis=us.length, guard=0;
+      while(row.scrollWidth>row.clientWidth+1 && vis>1 && guard++<40){
+        vis--; us[vis].style.display="none"; if(ss[vis-1]) ss[vis-1].style.display="none";
+        if(more){ more.textContent="+"+(us.length-vis); more.style.display=""; }
+      }
+      // لسه مش مكفّي بوحدة واحدة: الاسم نفسه يتقصّ بنقط
+      if(row.scrollWidth>row.clientWidth+1 && us[0]){ const e=us[0]; e.style.flexShrink="1"; e.style.minWidth="0"; e.style.overflow="hidden"; e.style.textOverflow="ellipsis"; }
+    };
+    if(bk){ bk.style.display=""; if(bs) bs.style.display=""; }
+    fit();
+    // اسم البنك اتزنق لحد ما بقى حرف أو اتنين: يتشال خالص ويسيب مكانه للوحدات
+    // والوحدات أولى بالمكان من اسم البنك: لو فيه وحدة مستخبية (+N) البنك يتشال
+    const hidden=us.some(e=>e.style.display==="none");
+    if(bk && (hidden || (bk.clientWidth<30 && bk.scrollWidth>bk.clientWidth+1))){ bk.style.display="none"; if(bs) bs.style.display="none"; fit(); }
+  });
+}
 function fitRows(){
   document.querySelectorAll(".fitrow").forEach(row=>{
     const cs=[...row.querySelectorAll(".fc")]; cs.forEach(c=>{ c.style.display=""; });
@@ -3435,7 +3469,7 @@ function fitRows(){
     }
   });
 }
-window.addEventListener("resize",function(){ try{fitRows();}catch(e){} });
+window.addEventListener("resize",function(){ try{fitRows(); fitUnits();}catch(e){} });
 // سطر الكمبوند: لو الخط على الجهاز أعرض من المتوقع، صغّره درجة درجة عشان يفضل سطر واحد
 function fitShrink(){
   document.querySelectorAll(".fitshrink").forEach(row=>{
